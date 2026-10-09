@@ -20,6 +20,7 @@ struct PlayerState {
     double speed = 1.0;
     double volume = 100.0;
     bool mute = false;
+    double fps = 0.0;
     int width = 0;
     int height = 0;
 };
@@ -45,9 +46,12 @@ public:
     bool set_low_latency(bool enabled);
     bool set_untimed(bool enabled);
     void toggle_pause();
+    void set_pause(bool paused);
     void stop_playback();
     void seek_relative(double seconds);
     void seek_absolute(double seconds);
+    void frame_step(bool forward);
+    double frame_duration() const;
     void adjust_speed(double delta);
     void reset_speed();
     void set_keepaspect(bool keep);
@@ -57,11 +61,13 @@ public:
     void set_volume(double volume, bool show_osd = true);
     void toggle_mute();
     void take_snapshot();
+    void show_osd(const std::string& text, int duration_ms = 1200);
 
     void poll();
     void consume_notify();
 
     PlayerState state() const;
+    std::wstring current_path() const;
     bool low_latency() const;
     bool untimed() const;
     bool running() const;
@@ -96,6 +102,7 @@ private:
     void set_video_size(int width, int height);
     void set_volume_state(double volume);
     void set_mute_state(bool mute);
+    void set_fps(double fps);
     void apply_volume(double volume, bool show_osd);
     void set_error(std::wstring error);
     void notify();

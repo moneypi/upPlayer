@@ -1,6 +1,5 @@
-# Build lite/full Windows zip packages for upPlayer.
-# Full package downloads the official Windows build from
-# https://github.com/mpv-player/mpv/releases
+# Build a Windows zip package for upPlayer.
+# Downloads the official Windows build from https://github.com/mpv-player/mpv/releases
 param(
     [string]$Configuration = "Release",
     [string]$OutDir = "",
@@ -112,34 +111,25 @@ if (-not $mpvExe) {
 }
 $mpvRoot = $mpvExe.Directory.FullName
 
-$LiteDir = Join-Path $OutDir "lite"
-$FullDir = Join-Path $OutDir "full"
-Remove-Item $LiteDir, $FullDir -Recurse -Force -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Force -Path $LiteDir, $FullDir | Out-Null
+$PkgDir = Join-Path $OutDir "package"
+Remove-Item $PkgDir -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force -Path $PkgDir | Out-Null
 
-Copy-Item $Exe $LiteDir
-Copy-Item $Exe $FullDir
-Copy-Item $mpvExe.FullName $FullDir
+Copy-Item $Exe $PkgDir
+Copy-Item $mpvExe.FullName $PkgDir
 
 Get-ChildItem $mpvRoot -File -Filter "*.dll" | ForEach-Object {
-    Copy-Item $_.FullName $FullDir -Force
+    Copy-Item $_.FullName $PkgDir -Force
 }
 
 $fonts = Join-Path $mpvRoot "mpv\fonts.conf"
 if (Test-Path $fonts) {
-    New-Item -ItemType Directory -Force -Path (Join-Path $FullDir "mpv") | Out-Null
-    Copy-Item $fonts (Join-Path $FullDir "mpv")
+    New-Item -ItemType Directory -Force -Path (Join-Path $PkgDir "mpv") | Out-Null
+    Copy-Item $fonts (Join-Path $PkgDir "mpv")
 }
 
-$LiteReadme = @"
-upPlayer (lite)
-
-Requires mpv.exe on PATH, or place libmpv-2.dll next to upPlayer.exe.
-
-Run: upPlayer.exe
-"@
-$FullReadme = @"
-upPlayer (full)
+$Readme = @"
+upPlayer
 
 Bundled official mpv Windows build:
   source: https://github.com/mpv-player/mpv/releases
@@ -147,18 +137,15 @@ Bundled official mpv Windows build:
   asset:  $($asset.name)
 
 Includes mpv.exe and its shipped runtime DLLs. No separate mpv install is required.
+Clip export (z/x/c) uses the bundled mpv.exe.
 
 Run: upPlayer.exe
 "@
-[IO.File]::WriteAllText((Join-Path $LiteDir "README.txt"), $LiteReadme, (New-Object Text.UTF8Encoding $false))
-[IO.File]::WriteAllText((Join-Path $FullDir "README.txt"), $FullReadme, (New-Object Text.UTF8Encoding $false))
+[IO.File]::WriteAllText((Join-Path $PkgDir "README.txt"), $Readme, (New-Object Text.UTF8Encoding $false))
 
-$LiteZip = Join-Path $OutDir "upPlayer-windows-x64-lite.zip"
-$FullZip = Join-Path $OutDir "upPlayer-windows-x64-full.zip"
-Remove-Item $LiteZip, $FullZip -Force -ErrorAction SilentlyContinue
-Compress-Archive -Path (Join-Path $LiteDir '*') -DestinationPath $LiteZip -Force
-Compress-Archive -Path (Join-Path $FullDir '*') -DestinationPath $FullZip -Force
+$Zip = Join-Path $OutDir "upPlayer-windows-x64.zip"
+Remove-Item $Zip -Force -ErrorAction SilentlyContinue
+Compress-Archive -Path (Join-Path $PkgDir '*') -DestinationPath $Zip -Force
 
-Write-Host "lite: $LiteZip ($((Get-Item $LiteZip).Length) bytes)"
-Write-Host "full: $FullZip ($((Get-Item $FullZip).Length) bytes)"
-Write-Host "mpv:  $($release.tag_name) / $($asset.name)"
+Write-Host "package: $Zip ($((Get-Item $Zip).Length) bytes)"
+Write-Host "mpv:     $($release.tag_name) / $($asset.name)"

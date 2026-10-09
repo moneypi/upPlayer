@@ -529,6 +529,8 @@ bool Player::start_libmpv(HWND video, std::wstring& error) {
     api_->observe_property(ctx, 7, "height", MPV_FORMAT_INT64);
     api_->observe_property(ctx, 8, "volume", MPV_FORMAT_DOUBLE);
     api_->observe_property(ctx, 9, "mute", MPV_FORMAT_FLAG);
+    api_->observe_property(ctx, 10, "container-fps", MPV_FORMAT_DOUBLE);
+    api_->observe_property(ctx, 11, "estimated-vf-fps", MPV_FORMAT_DOUBLE);
     running_.store(true);
     backend_exe_ = false;
     backend_label_ = L"libmpv";
@@ -624,6 +626,8 @@ bool Player::start_exe(HWND video, std::wstring& error) {
     write_line("{\"command\":[\"observe_property\",7,\"height\"]}");
     write_line("{\"command\":[\"observe_property\",8,\"volume\"]}");
     write_line("{\"command\":[\"observe_property\",9,\"mute\"]}");
+    write_line("{\"command\":[\"observe_property\",10,\"container-fps\"]}");
+    write_line("{\"command\":[\"observe_property\",11,\"estimated-vf-fps\"]}");
 
     running_.store(true);
     backend_exe_ = true;
@@ -793,6 +797,8 @@ void Player::handle_ipc_line(const std::string& line) {
                 set_volume_state(data.kind == JsonKind::Number ? data.number : 100.0);
             else if (name == "mute" && data.kind == JsonKind::Bool)
                 set_mute_state(data.boolean);
+            else if (name == "container-fps" || name == "estimated-vf-fps")
+                set_fps(data.kind == JsonKind::Number ? data.number : 0.0);
         } else if (event == "file-loaded") {
             on_file_loaded();
         } else if (event == "end-file") {
@@ -941,6 +947,19 @@ void Player::toggle_pause() {
     post({"cycle", "pause"});
 }
 
+void Player::set_pause(bool paused) {
+    if (!running_.load())
+        return;
+    if (!backend_exe_ && ctx_ && api_ && api_->set_property) {
+        int flag = paused ? 1 : 0;
+        api_->set_property(static_cast<mpv_handle*>(ctx_), "pause", MPV_FORMAT_FLAG, &flag);
+    } else {
+        write_line(std::string("{\"command\":[\"set_property\",\"pause\",") +
+                   (paused ? "true" : "false") + "]}");
+    }
+    set_paused(paused);
+}
+
 void Player::stop_playback() {
     post({"stop"});
     {
@@ -1019,7 +1038,17 @@ void Player::set_volume(double volume, bool show_osd) {
 
 void Player::take_snapshot() {
     post({"screenshot"});
-    post({"show-text", "Snapshot saved to Desktop", "1200"});
+    show_osd("Snapshot saved to Desktop", 1200);
+}
+
+void Player::show_osd(const std::string& text, int duration_ms) {
+    if (text.empty())
+        return;
+    if (duration_ms < 100)
+        duration_ms = 100;
+    char ms[32];
+    snprintf(ms, sizeof(ms), "%d", duration_ms);
+    post({"show-text", text, ms});
 }
 
 void Player::toggle_mute() {
@@ -1119,6 +1148,17 @@ void Player::seek_absolute(double seconds) {
         state_.time_pos = seconds;
     }
     notify();
+}
+
+void Player::frame_step(bool forward) {
+    post({forward ? "frame-step" : "frame-back-step"});
+}
+
+double Player::frame_duration() const {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (state_.fps > 1.0 && state_.fps <= 240.0)
+        return 1.0 / state_.fps;
+    return 1.0 / 30.0;
 }
 
 void Player::post(const std::vector<std::string>& args) {
@@ -1344,6 +1384,15 @@ void Player::set_mute_state(bool mute) {
     notify();
 }
 
+void Player::set_fps(double fps) {
+    if (!(fps > 1.0) || fps > 240.0)
+        return;
+    std::lock_guard<std::mutex> lock(mu_);
+    if (std::fabs(state_.fps - fps) < 0.05)
+        return;
+    state_.fps = fps;
+}
+
 void Player::set_error(std::wstring error) {
     {
         std::lock_guard<std::mutex> lock(mu_);
@@ -1393,6 +1442,10 @@ void Player::poll() {
                     set_volume_state(*static_cast<double*>(prop->data));
                 else if (std::strcmp(prop->name, "mute") == 0 && prop->format == MPV_FORMAT_FLAG)
                     set_mute_state(*static_cast<int*>(prop->data) != 0);
+                else if ((std::strcmp(prop->name, "container-fps") == 0 ||
+                          std::strcmp(prop->name, "estimated-vf-fps") == 0) &&
+                         prop->format == MPV_FORMAT_DOUBLE)
+                    set_fps(*static_cast<double*>(prop->data));
                 else if (std::strcmp(prop->name, "media-title") == 0 && api_->get_property_string && api_->free_fn) {
                     char* title = api_->get_property_string(ctx, "media-title");
                     if (title) {
@@ -1425,6 +1478,11 @@ void Player::poll() {
 PlayerState Player::state() const {
     std::lock_guard<std::mutex> lock(mu_);
     return state_;
+}
+
+std::wstring Player::current_path() const {
+    std::lock_guard<std::mutex> lock(mu_);
+    return Utf8ToWide(current_utf8_);
 }
 
 bool Player::low_latency() const { return low_latency_.load(); }

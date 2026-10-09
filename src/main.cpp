@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -21,6 +22,7 @@
 namespace {
 
 constexpr int kTimerStatus = 1;
+constexpr int kTimerClickPause = 2;
 constexpr int kSeekBarId = 3001;
 
 #ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
@@ -46,6 +48,139 @@ std::wstring FormatTime(double seconds) {
     else
         swprintf_s(buffer, L"%02d:%02d", total / 60, total % 60);
     return buffer;
+}
+
+std::wstring QuoteCmd(const std::wstring& arg) {
+    std::wstring out = L"\"";
+    for (wchar_t c : arg) {
+        if (c == L'"')
+            out += L"\\\"";
+        else
+            out.push_back(c);
+    }
+    out += L'"';
+    return out;
+}
+
+std::wstring FindExecutable(const wchar_t* name) {
+    wchar_t buffer[MAX_PATH];
+    const DWORD length = SearchPathW(nullptr, name, nullptr, MAX_PATH, buffer, nullptr);
+    if (length > 0 && length < MAX_PATH)
+        return buffer;
+    if (GetModuleFileNameW(nullptr, buffer, MAX_PATH) > 0) {
+        std::wstring dir(buffer);
+        const auto slash = dir.find_last_of(L"\\/");
+        if (slash != std::wstring::npos)
+            dir.resize(slash);
+        const std::wstring candidate = dir + L"\\" + name;
+        if (GetFileAttributesW(candidate.c_str()) != INVALID_FILE_ATTRIBUTES)
+            return candidate;
+    }
+    return {};
+}
+
+std::string FormatTimeAscii(double seconds) {
+    if (!(seconds >= 0.0) || seconds > 86400.0 * 10.0)
+        return "--:--";
+    const int total = static_cast<int>(seconds + 0.5);
+    char buffer[32];
+    if (total >= 3600)
+        snprintf(buffer, sizeof(buffer), "%d:%02d:%02d", total / 3600, (total / 60) % 60, total % 60);
+    else
+        snprintf(buffer, sizeof(buffer), "%02d:%02d", total / 60, total % 60);
+    return buffer;
+}
+
+std::wstring SuggestClipName(const std::wstring& source, double start, double end) {
+    std::wstring base = source;
+    const auto q = base.find_first_of(L"?#");
+    if (q != std::wstring::npos)
+        base = base.substr(0, q);
+    const auto slash = base.find_last_of(L"\\/");
+    if (slash != std::wstring::npos)
+        base = base.substr(slash + 1);
+    const auto dot = base.find_last_of(L'.');
+    std::wstring stem = (dot == std::wstring::npos) ? base : base.substr(0, dot);
+    std::wstring ext = (dot == std::wstring::npos) ? L".mp4" : base.substr(dot);
+    if (stem.empty())
+        stem = L"clip";
+    wchar_t name[MAX_PATH];
+    swprintf_s(name, L"%s_%s-%s%s", stem.c_str(), FormatTime(start).c_str(), FormatTime(end).c_str(),
+               ext.c_str());
+    std::wstring out = name;
+    for (wchar_t& c : out) {
+        if (c == L':' || c == L'/' || c == L'\\' || c == L'?' || c == L'*' || c == L'"' || c == L'<' ||
+            c == L'>' || c == L'|')
+            c = L'-';
+    }
+    return out;
+}
+
+bool RunProcessWait(const std::wstring& command, DWORD& exit_code, std::wstring* log_out = nullptr) {
+    wchar_t temp_dir[MAX_PATH] = {};
+    wchar_t log_path[MAX_PATH] = {};
+    HANDLE log = INVALID_HANDLE_VALUE;
+    if (log_out) {
+        GetTempPathW(MAX_PATH, temp_dir);
+        if (GetTempFileNameW(temp_dir, L"upcl", 0, log_path)) {
+            SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
+            log = CreateFileW(log_path, GENERIC_WRITE, FILE_SHARE_READ, &sa, CREATE_ALWAYS,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (log != INVALID_HANDLE_VALUE)
+                *log_out = log_path;
+        }
+    }
+
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    if (log != INVALID_HANDLE_VALUE) {
+        si.dwFlags |= STARTF_USESTDHANDLES;
+        si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+        si.hStdOutput = log;
+        si.hStdError = log;
+    }
+    PROCESS_INFORMATION pi{};
+    std::wstring mutable_cmd = command;
+    const BOOL ok = CreateProcessW(nullptr, mutable_cmd.data(), nullptr, nullptr,
+                                   log != INVALID_HANDLE_VALUE, CREATE_NO_WINDOW, nullptr, nullptr, &si,
+                                   &pi);
+    if (log != INVALID_HANDLE_VALUE)
+        CloseHandle(log);
+    if (!ok)
+        return false;
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    exit_code = 1;
+    GetExitCodeProcess(pi.hProcess, &exit_code);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return true;
+}
+
+std::wstring ReadTextFileHead(const std::wstring& path, size_t max_chars = 800) {
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE)
+        return {};
+    std::string bytes(max_chars, '\0');
+    DWORD read = 0;
+    ReadFile(file, bytes.data(), static_cast<DWORD>(bytes.size()), &read, nullptr);
+    CloseHandle(file);
+    bytes.resize(read);
+    if (bytes.empty())
+        return {};
+    const int needed = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, bytes.data(),
+                                           static_cast<int>(bytes.size()), nullptr, 0);
+    std::wstring wide;
+    if (needed > 0) {
+        wide.resize(static_cast<size_t>(needed));
+        MultiByteToWideChar(CP_UTF8, 0, bytes.data(), static_cast<int>(bytes.size()), wide.data(),
+                            needed);
+    } else {
+        wide.assign(bytes.begin(), bytes.end());
+    }
+    return wide;
 }
 
 struct UrlDialogResult {
@@ -130,6 +265,21 @@ private:
     void resize_to_video_scale(double scale);
     void enter_fullscreen(bool stretch);
     void exit_fullscreen();
+    void toggle_fullscreen();
+    enum class ClipMark { None, In, Out };
+
+    void mark_clip_in();
+    void mark_clip_out();
+    void clear_clip_marks();
+    void export_clip();
+    void nudge_clip_or_frame(int direction);
+    void handle_escape();
+    bool clip_session_active() const;
+    void set_clip_mark_time(ClipMark mark, double time, bool announce);
+    void normalize_clip_marks();
+    ClipMark hit_clip_marker(int x) const;
+    void clip_mark_from_point(int x);
+    double time_from_seek_x(int x) const;
     int dpi() const;
     int seek_bar_height() const;
 
@@ -145,6 +295,10 @@ private:
     bool volume_dragging_ = false;
     double seek_preview_ = -1.0;
     double volume_preview_ = -1.0;
+    double clip_in_ = -1.0;
+    double clip_out_ = -1.0;
+    ClipMark clip_active_ = ClipMark::None;
+    ClipMark clip_dragging_ = ClipMark::None;
     bool fullscreen_ = false;
     RECT windowed_rect_{};
     LONG windowed_style_ = 0;
@@ -166,6 +320,7 @@ bool App::create(int show, const std::vector<std::wstring>& files) {
     InitCommonControlsEx(&controls);
 
     WNDCLASSW video_class{};
+    video_class.style = CS_DBLCLKS;
     video_class.lpfnWndProc = VideoProc;
     video_class.hInstance = instance_;
     video_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
@@ -398,44 +553,56 @@ LRESULT CALLBACK App::WndProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpa
 }
 
 LRESULT CALLBACK App::VideoProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
+    HWND parent = GetParent(hwnd);
+    auto* app = parent ? reinterpret_cast<App*>(GetWindowLongPtrW(parent, GWLP_USERDATA)) : nullptr;
     if (message == WM_LBUTTONDOWN || message == WM_RBUTTONDOWN)
         SetFocus(hwnd);
     if (message == WM_PARENTNOTIFY &&
         (LOWORD(wparam) == WM_LBUTTONDOWN || LOWORD(wparam) == WM_RBUTTONDOWN))
         SetFocus(hwnd);
+    if (message == WM_LBUTTONUP && app) {
+        SetFocus(hwnd);
+        // Delay play/pause so a double-click can toggle fullscreen instead.
+        SetTimer(hwnd, kTimerClickPause, GetDoubleClickTime(), nullptr);
+        return 0;
+    }
+    if (message == WM_LBUTTONDBLCLK && app) {
+        KillTimer(hwnd, kTimerClickPause);
+        SetFocus(hwnd);
+        app->toggle_fullscreen();
+        return 0;
+    }
+    if (message == WM_TIMER && wparam == kTimerClickPause) {
+        KillTimer(hwnd, kTimerClickPause);
+        if (app && app->player_.state().has_media)
+            app->player_.toggle_pause();
+        return 0;
+    }
     if (message == WM_ERASEBKGND) {
         RECT rect{};
         GetClientRect(hwnd, &rect);
         FillRect(reinterpret_cast<HDC>(wparam), &rect, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
         return 1;
     }
-    if (message == WM_MOUSEWHEEL) {
-        HWND parent = GetParent(hwnd);
-        auto* app = parent ? reinterpret_cast<App*>(GetWindowLongPtrW(parent, GWLP_USERDATA)) : nullptr;
-        if (app) {
-            const int delta = GET_WHEEL_DELTA_WPARAM(wparam);
-            if (delta > 0)
-                app->player_.adjust_volume(2.0);
-            else if (delta < 0)
-                app->player_.adjust_volume(-2.0);
-            SetFocus(hwnd);
-            return 0;
-        }
+    if (message == WM_MOUSEWHEEL && app) {
+        const int delta = GET_WHEEL_DELTA_WPARAM(wparam);
+        if (delta > 0)
+            app->player_.adjust_volume(2.0);
+        else if (delta < 0)
+            app->player_.adjust_volume(-2.0);
+        SetFocus(hwnd);
+        return 0;
     }
-    if (message == WM_CONTEXTMENU) {
-        HWND parent = GetParent(hwnd);
-        auto* app = parent ? reinterpret_cast<App*>(GetWindowLongPtrW(parent, GWLP_USERDATA)) : nullptr;
-        if (app) {
-            POINT pt{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
-            if (pt.x == -1 && pt.y == -1) {
-                RECT rect{};
-                GetWindowRect(hwnd, &rect);
-                pt.x = rect.left + (rect.right - rect.left) / 2;
-                pt.y = rect.top + (rect.bottom - rect.top) / 2;
-            }
-            app->show_context_menu(pt.x, pt.y);
-            return 0;
+    if (message == WM_CONTEXTMENU && app) {
+        POINT pt{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+        if (pt.x == -1 && pt.y == -1) {
+            RECT rect{};
+            GetWindowRect(hwnd, &rect);
+            pt.x = rect.left + (rect.right - rect.left) / 2;
+            pt.y = rect.top + (rect.bottom - rect.top) / 2;
         }
+        app->show_context_menu(pt.x, pt.y);
+        return 0;
     }
     return DefWindowProcW(hwnd, message, wparam, lparam);
 }
@@ -469,6 +636,8 @@ void App::create_children() {
     AppendMenuW(playback_menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(playback_menu, MF_STRING, ID_SEEK_BACK, L"Seek -5s\tLeft");
     AppendMenuW(playback_menu, MF_STRING, ID_SEEK_FORWARD, L"Seek +5s\tRight");
+    AppendMenuW(playback_menu, MF_STRING, ID_FRAME_BACK, L"Frame Back\t,");
+    AppendMenuW(playback_menu, MF_STRING, ID_FRAME_FORWARD, L"Frame Forward\t.");
     AppendMenuW(playback_menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(playback_menu, MF_STRING, ID_STATS_SHOW, L"Stats\ti");
     AppendMenuW(playback_menu, MF_STRING, ID_STATS_TOGGLE, L"Stats Toggle\tI");
@@ -484,6 +653,7 @@ void App::create_children() {
     AppendMenuW(size_menu, MF_STRING, ID_SIZE_15, L"1.5x\t3");
     AppendMenuW(size_menu, MF_STRING, ID_SIZE_20, L"2x\t4");
     AppendMenuW(size_menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(size_menu, MF_STRING, ID_FULLSCREEN_TOGGLE, L"Toggle Fullscreen\tEnter / Double-click");
     AppendMenuW(size_menu, MF_STRING, ID_FULLSCREEN_NORMAL, L"Fullscreen\t5");
     AppendMenuW(size_menu, MF_STRING, ID_FULLSCREEN_STRETCH, L"Fullscreen Stretch\t6");
 
@@ -491,6 +661,15 @@ void App::create_children() {
     AppendMenuW(volume_menu, MF_STRING, ID_VOLUME_DOWN, L"Down\t9");
     AppendMenuW(volume_menu, MF_STRING, ID_VOLUME_UP, L"Up\t0");
     AppendMenuW(volume_menu, MF_STRING, ID_VOLUME_MUTE, L"Mute\tm");
+
+    HMENU clip_menu = CreatePopupMenu();
+    AppendMenuW(clip_menu, MF_STRING, ID_CLIP_MARK_IN, L"Mark In\tz");
+    AppendMenuW(clip_menu, MF_STRING, ID_CLIP_MARK_OUT, L"Mark Out\tx");
+    AppendMenuW(clip_menu, MF_STRING, ID_FRAME_BACK, L"Nudge Mark / Frame -\t,");
+    AppendMenuW(clip_menu, MF_STRING, ID_FRAME_FORWARD, L"Nudge Mark / Frame +\t.");
+    AppendMenuW(clip_menu, MF_STRING, ID_CLIP_EXPORT, L"Export Clip...\tc");
+    AppendMenuW(clip_menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(clip_menu, MF_STRING, ID_CLIP_CLEAR, L"Cancel Clip\tEsc");
 
     context_menu_ = CreatePopupMenu();
     AppendMenuW(context_menu_, MF_STRING, ID_FILE_OPEN, L"Open...\tCtrl+O");
@@ -501,6 +680,7 @@ void App::create_children() {
     AppendMenuW(context_menu_, MF_POPUP, reinterpret_cast<UINT_PTR>(speed_menu), L"Speed");
     AppendMenuW(context_menu_, MF_POPUP, reinterpret_cast<UINT_PTR>(size_menu), L"Size");
     AppendMenuW(context_menu_, MF_POPUP, reinterpret_cast<UINT_PTR>(volume_menu), L"Volume");
+    AppendMenuW(context_menu_, MF_POPUP, reinterpret_cast<UINT_PTR>(clip_menu), L"Clip");
     AppendMenuW(context_menu_, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(context_menu_, MF_STRING, ID_FILE_EXIT, L"Exit");
 
@@ -526,6 +706,13 @@ void App::exit_fullscreen() {
                  SWP_NOZORDER | SWP_FRAMECHANGED);
     fullscreen_ = false;
     layout();
+}
+
+void App::toggle_fullscreen() {
+    if (fullscreen_)
+        exit_fullscreen();
+    else
+        enter_fullscreen(false);
 }
 
 void App::enter_fullscreen(bool stretch) {
@@ -660,22 +847,113 @@ bool App::hit_volume_slider(int x) const {
     return x >= vol_left - MulDiv(4, dpi(), 96) && x <= vol_right + MulDiv(4, dpi(), 96);
 }
 
-void App::seek_from_point(int x) {
+double App::time_from_seek_x(int x) const {
     const PlayerState playback = player_.state();
-    if (!(playback.duration > 0.0))
-        return;
+    if (!(playback.duration > 0.0) || !seek_bar_)
+        return -1.0;
     RECT rect{};
     GetClientRect(seek_bar_, &rect);
     int pad = 0, time_width = 0, seek_left = 0, seek_right = 0, vol_left = 0, vol_right = 0;
     bar_metrics(rect.right, pad, time_width, seek_left, seek_right, vol_left, vol_right);
     if (seek_right <= seek_left)
-        return;
+        return -1.0;
     double ratio = static_cast<double>(x - seek_left) / static_cast<double>(seek_right - seek_left);
     if (ratio < 0.0)
         ratio = 0.0;
     if (ratio > 1.0)
         ratio = 1.0;
-    seek_preview_ = ratio * playback.duration;
+    return ratio * playback.duration;
+}
+
+App::ClipMark App::hit_clip_marker(int x) const {
+    const PlayerState playback = player_.state();
+    if (!(playback.duration > 0.0) || !seek_bar_)
+        return ClipMark::None;
+    RECT rect{};
+    GetClientRect(seek_bar_, &rect);
+    int pad = 0, time_width = 0, seek_left = 0, seek_right = 0, vol_left = 0, vol_right = 0;
+    bar_metrics(rect.right, pad, time_width, seek_left, seek_right, vol_left, vol_right);
+    if (seek_right <= seek_left)
+        return ClipMark::None;
+    const int slop = MulDiv(10, dpi(), 96);
+    auto marker_x = [&](double t) {
+        return seek_left +
+               static_cast<int>((seek_right - seek_left) * (t / playback.duration) + 0.5);
+    };
+    int best_dist = slop + 1;
+    ClipMark hit = ClipMark::None;
+    auto consider = [&](ClipMark mark, double t) {
+        if (!(t >= 0.0))
+            return;
+        const int dist = std::abs(x - marker_x(t));
+        if (dist <= slop && dist < best_dist) {
+            best_dist = dist;
+            hit = mark;
+        }
+    };
+    consider(ClipMark::In, clip_in_);
+    consider(ClipMark::Out, clip_out_);
+    return hit;
+}
+
+void App::normalize_clip_marks() {
+    const double frame = player_.frame_duration();
+    if (!(clip_in_ >= 0.0 && clip_out_ >= 0.0) || clip_out_ > clip_in_)
+        return;
+    const ClipMark which =
+        clip_dragging_ != ClipMark::None ? clip_dragging_ : clip_active_;
+    if (which == ClipMark::In)
+        clip_in_ = (std::max)(0.0, clip_out_ - frame);
+    else
+        clip_out_ = clip_in_ + frame;
+}
+
+void App::set_clip_mark_time(ClipMark mark, double time, bool announce) {
+    const PlayerState playback = player_.state();
+    if (!(time >= 0.0))
+        return;
+    if (playback.duration > 0.0 && time > playback.duration)
+        time = playback.duration;
+    if (mark == ClipMark::In) {
+        clip_in_ = time;
+        if (clip_dragging_ == ClipMark::None && clip_out_ >= 0.0 && clip_out_ <= clip_in_)
+            clip_out_ = -1.0;
+    } else if (mark == ClipMark::Out) {
+        clip_out_ = time;
+        if (clip_dragging_ == ClipMark::None && clip_in_ >= 0.0 && clip_out_ <= clip_in_) {
+            const double tmp = clip_in_;
+            clip_in_ = clip_out_;
+            clip_out_ = tmp;
+        }
+    } else {
+        return;
+    }
+    clip_active_ = mark;
+    normalize_clip_marks();
+    const double shown = (clip_active_ == ClipMark::In) ? clip_in_ : clip_out_;
+    player_.seek_absolute(shown);
+    if (announce)
+        player_.show_osd((clip_active_ == ClipMark::In ? "Clip In: " : "Clip Out: ") +
+                             FormatTimeAscii(shown),
+                         900);
+    update_seek_bar();
+}
+
+void App::clip_mark_from_point(int x) {
+    if (clip_dragging_ == ClipMark::None)
+        return;
+    const double time = time_from_seek_x(x);
+    if (!(time >= 0.0))
+        return;
+    set_clip_mark_time(clip_dragging_, time, false);
+}
+
+void App::seek_from_point(int x) {
+    const double time = time_from_seek_x(x);
+    if (!(time >= 0.0))
+        return;
+    clip_active_ = ClipMark::None;
+    seek_preview_ = time;
     player_.seek_absolute(seek_preview_);
     update_seek_bar();
 }
@@ -750,6 +1028,41 @@ LRESULT App::handle_seek_bar(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
         else
             draw_track(seek_left, seek_right, 0.0, RGB(90, 200, 250));
 
+        if (duration > 0.0 && seek_right > seek_left) {
+            auto marker_x = [&](double t) {
+                double ratio = t / duration;
+                if (ratio < 0.0)
+                    ratio = 0.0;
+                if (ratio > 1.0)
+                    ratio = 1.0;
+                return seek_left + static_cast<int>((seek_right - seek_left) * ratio + 0.5);
+            };
+            if (clip_in_ >= 0.0 && clip_out_ > clip_in_) {
+                const int left = marker_x(clip_in_);
+                const int right = marker_x(clip_out_);
+                RECT range{left, track_y - MulDiv(2, dpi(), 96), right,
+                           track_y + track_height + MulDiv(2, dpi(), 96)};
+                const HBRUSH range_brush = CreateSolidBrush(RGB(250, 180, 60));
+                FillRect(dc, &range, range_brush);
+                DeleteObject(range_brush);
+            }
+            auto draw_marker = [&](double t, ClipMark mark, COLORREF color) {
+                if (!(t >= 0.0))
+                    return;
+                const int x = marker_x(t);
+                const bool active = clip_active_ == mark || clip_dragging_ == mark;
+                const int half = MulDiv(active ? 3 : 2, dpi(), 96);
+                const int top = track_y - MulDiv(active ? 8 : 6, dpi(), 96);
+                const int bottom = track_y + track_height + MulDiv(active ? 8 : 6, dpi(), 96);
+                RECT mark_rect{x - half, top, x + half + 1, bottom};
+                const HBRUSH brush = CreateSolidBrush(color);
+                FillRect(dc, &mark_rect, brush);
+                DeleteObject(brush);
+            };
+            draw_marker(clip_in_, ClipMark::In, RGB(80, 210, 120));
+            draw_marker(clip_out_, ClipMark::Out, RGB(255, 140, 40));
+        }
+
         const COLORREF vol_color = playback.mute ? RGB(120, 120, 128) : RGB(120, 210, 150);
         draw_track(vol_left, vol_right, playback.mute ? 0.0 : (volume / 100.0), vol_color);
 
@@ -776,6 +1089,10 @@ LRESULT App::handle_seek_bar(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
         if (hit_volume_slider(x)) {
             volume_dragging_ = true;
             volume_from_point(x, false);
+        } else if (const ClipMark mark = hit_clip_marker(x); mark != ClipMark::None) {
+            clip_dragging_ = mark;
+            clip_active_ = mark;
+            clip_mark_from_point(x);
         } else {
             seeking_ = true;
             seek_from_point(x);
@@ -785,6 +1102,8 @@ LRESULT App::handle_seek_bar(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
     case WM_MOUSEMOVE:
         if (volume_dragging_ && (wparam & MK_LBUTTON))
             volume_from_point(GET_X_LPARAM(lparam), false);
+        else if (clip_dragging_ != ClipMark::None && (wparam & MK_LBUTTON))
+            clip_mark_from_point(GET_X_LPARAM(lparam));
         else if (seeking_ && (wparam & MK_LBUTTON))
             seek_from_point(GET_X_LPARAM(lparam));
         return 0;
@@ -793,6 +1112,15 @@ LRESULT App::handle_seek_bar(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
             volume_dragging_ = false;
             volume_from_point(GET_X_LPARAM(lparam), true);
             volume_preview_ = -1.0;
+            ReleaseCapture();
+            update_seek_bar();
+        } else if (clip_dragging_ != ClipMark::None) {
+            clip_mark_from_point(GET_X_LPARAM(lparam));
+            clip_dragging_ = ClipMark::None;
+            if (clip_active_ == ClipMark::In)
+                player_.show_osd("Clip In: " + FormatTimeAscii(clip_in_), 900);
+            else if (clip_active_ == ClipMark::Out)
+                player_.show_osd("Clip Out: " + FormatTimeAscii(clip_out_), 900);
             ReleaseCapture();
             update_seek_bar();
         } else if (seeking_) {
@@ -806,6 +1134,7 @@ LRESULT App::handle_seek_bar(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
     case WM_CAPTURECHANGED:
         seeking_ = false;
         volume_dragging_ = false;
+        clip_dragging_ = ClipMark::None;
         seek_preview_ = -1.0;
         volume_preview_ = -1.0;
         return 0;
@@ -858,8 +1187,149 @@ void App::open_url() {
 }
 
 void App::open_target(const std::wstring& target) {
+    clip_in_ = -1.0;
+    clip_out_ = -1.0;
+    clip_active_ = ClipMark::None;
+    clip_dragging_ = ClipMark::None;
     if (!player_.load(target))
         update_title();
+    update_seek_bar();
+}
+
+bool App::clip_session_active() const {
+    return clip_in_ >= 0.0 || clip_out_ >= 0.0 || clip_active_ != ClipMark::None ||
+           clip_dragging_ != ClipMark::None;
+}
+
+void App::mark_clip_in() {
+    const PlayerState playback = player_.state();
+    if (!playback.has_media || !(playback.time_pos >= 0.0)) {
+        player_.show_osd("No media", 1000);
+        return;
+    }
+    player_.set_pause(true);
+    set_clip_mark_time(ClipMark::In, playback.time_pos, true);
+}
+
+void App::mark_clip_out() {
+    const PlayerState playback = player_.state();
+    if (!playback.has_media || !(playback.time_pos >= 0.0)) {
+        player_.show_osd("No media", 1000);
+        return;
+    }
+    player_.set_pause(true);
+    set_clip_mark_time(ClipMark::Out, playback.time_pos, true);
+}
+
+void App::clear_clip_marks() {
+    if (!clip_session_active())
+        return;
+    clip_in_ = -1.0;
+    clip_out_ = -1.0;
+    clip_active_ = ClipMark::None;
+    clip_dragging_ = ClipMark::None;
+    player_.show_osd("Clip cancelled", 1000);
+    update_seek_bar();
+}
+
+void App::handle_escape() {
+    if (clip_session_active()) {
+        clear_clip_marks();
+        return;
+    }
+    if (fullscreen_)
+        exit_fullscreen();
+}
+
+void App::nudge_clip_or_frame(int direction) {
+    if (direction == 0)
+        return;
+    if (clip_active_ == ClipMark::In || clip_active_ == ClipMark::Out) {
+        const double current = clip_active_ == ClipMark::In ? clip_in_ : clip_out_;
+        if (!(current >= 0.0)) {
+            player_.frame_step(direction > 0);
+            return;
+        }
+        set_clip_mark_time(clip_active_, current + direction * player_.frame_duration(), true);
+        return;
+    }
+    player_.frame_step(direction > 0);
+}
+
+void App::export_clip() {
+    if (!(clip_in_ >= 0.0) || !(clip_out_ > clip_in_)) {
+        player_.show_osd("Mark In (z) and Out (x) first", 1600);
+        return;
+    }
+    const std::wstring source = player_.current_path();
+    if (source.empty()) {
+        player_.show_osd("No source path", 1200);
+        return;
+    }
+    const std::wstring mpv = FindExecutable(L"mpv.exe");
+    if (mpv.empty()) {
+        MessageBoxW(hwnd_,
+                    L"mpv.exe was not found.\n\n"
+                    L"Place mpv.exe next to upPlayer.exe (release package includes it), or add it to PATH.",
+                    L"Export Clip", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    const double start = clip_in_;
+    const double end = clip_out_;
+    std::wstring suggested = SuggestClipName(source, start, end);
+    std::vector<wchar_t> buffer(32768, L'\0');
+    wcsncpy_s(buffer.data(), buffer.size(), suggested.c_str(), _TRUNCATE);
+
+    OPENFILENAMEW dialog{};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = hwnd_;
+    dialog.lpstrFilter = L"Media files\0*.*\0";
+    dialog.lpstrFile = buffer.data();
+    dialog.nMaxFile = static_cast<DWORD>(buffer.size());
+    dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_NOCHANGEDIR;
+    dialog.lpstrTitle = L"Export Clip";
+    dialog.lpstrDefExt = L"mp4";
+    if (!GetSaveFileNameW(&dialog))
+        return;
+
+    wchar_t start_arg[64];
+    wchar_t end_arg[64];
+    swprintf_s(start_arg, L"%.3f", start);
+    swprintf_s(end_arg, L"%.3f", end);
+
+    // Official Windows mpv builds do not expose --ovc=copy. Use stream-record to dump A–B.
+    const std::wstring output = buffer.data();
+    const std::wstring command =
+        QuoteCmd(mpv) + L" --no-config --vo=null --ao=null --sid=no --start=" + start_arg +
+        L" --end=" + end_arg + L" --stream-record=" + QuoteCmd(output) + L" -- " + QuoteCmd(source);
+
+    player_.show_osd("Exporting clip...", 2000);
+    DWORD exit_code = 1;
+    std::wstring log_path;
+    const bool started = RunProcessWait(command, exit_code, &log_path);
+    WIN32_FILE_ATTRIBUTE_DATA out_info{};
+    const bool wrote = GetFileAttributesExW(output.c_str(), GetFileExInfoStandard, &out_info) &&
+                       (out_info.nFileSizeLow > 0 || out_info.nFileSizeHigh > 0);
+
+    if (!started || exit_code != 0 || !wrote) {
+        std::wstring message =
+            L"mpv failed to export the clip.\n\n"
+            L"Try a slightly earlier In mark (keyframe), or keep the same extension as the source.";
+        if (!log_path.empty()) {
+            const std::wstring log = ReadTextFileHead(log_path);
+            if (!log.empty()) {
+                message += L"\n\n";
+                message += log;
+            }
+            DeleteFileW(log_path.c_str());
+        }
+        MessageBoxW(hwnd_, message.c_str(), L"Export Clip", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    if (!log_path.empty())
+        DeleteFileW(log_path.c_str());
+    player_.show_osd("Clip exported", 1400);
 }
 
 LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
@@ -898,10 +1368,18 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
             update_seek_bar();
             return 0;
         case ID_SEEK_BACK:
+            clip_active_ = ClipMark::None;
             player_.seek_relative(-5.0);
             return 0;
         case ID_SEEK_FORWARD:
+            clip_active_ = ClipMark::None;
             player_.seek_relative(5.0);
+            return 0;
+        case ID_FRAME_BACK:
+            nudge_clip_or_frame(-1);
+            return 0;
+        case ID_FRAME_FORWARD:
+            nudge_clip_or_frame(1);
             return 0;
         case ID_SPEED_DOWN:
             player_.adjust_speed(-0.1);
@@ -923,6 +1401,9 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
             return 0;
         case ID_SIZE_20:
             resize_to_video_scale(2.0);
+            return 0;
+        case ID_FULLSCREEN_TOGGLE:
+            toggle_fullscreen();
             return 0;
         case ID_FULLSCREEN_NORMAL:
             enter_fullscreen(false);
@@ -947,6 +1428,21 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
             return 0;
         case ID_SNAPSHOT:
             player_.take_snapshot();
+            return 0;
+        case ID_CLIP_MARK_IN:
+            mark_clip_in();
+            return 0;
+        case ID_CLIP_MARK_OUT:
+            mark_clip_out();
+            return 0;
+        case ID_CLIP_CLEAR:
+            clear_clip_marks();
+            return 0;
+        case ID_ESCAPE:
+            handle_escape();
+            return 0;
+        case ID_CLIP_EXPORT:
+            export_clip();
             return 0;
         default:
             break;
@@ -1006,7 +1502,7 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
         if (wparam == kTimerStatus) {
             claim_keyboard_focus();
             update_title();
-            if (!seeking_)
+            if (!seeking_ && clip_dragging_ == ClipMark::None)
                 update_seek_bar();
         }
         return 0;
