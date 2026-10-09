@@ -1,0 +1,16 @@
+#pragma once
+
+#define ID_FILE_OPEN 1001
+#define ID_FILE_OPEN_URL 1002
+#define ID_FILE_EXIT 1003
+#define ID_PLAY_PAUSE 1101
+#define ID_STOP 1102
+#define ID_SEEK_BACK 1103
+#define ID_SEEK_FORWARD 1104
+
+#define IDC_ACCEL 2001
+#define IDD_URL 2002
+#define IDC_URL 2003
+#define IDC_LOW_LATENCY 2004
+#define IDC_UNTIMED 2005
+#define IDI_APP 100

@@ -1,0 +1,6 @@
+/build/
+/out/
+/.vs/
+/CMakeUserPresets.json
+*.user
+/third_party/libmpv-win/
