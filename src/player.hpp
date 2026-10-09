@@ -17,6 +17,9 @@ struct PlayerState {
     double duration = -1.0;
     bool paused = false;
     bool has_media = false;
+    double speed = 1.0;
+    int width = 0;
+    int height = 0;
 };
 
 // Embeds mpv. Prefers libmpv (headers from the mpv submodule); if libmpv-2.dll
@@ -43,6 +46,9 @@ public:
     void stop_playback();
     void seek_relative(double seconds);
     void seek_absolute(double seconds);
+    void adjust_speed(double delta);
+    void reset_speed();
+    void set_keepaspect(bool keep);
 
     void poll();
     void consume_notify();
@@ -77,6 +83,9 @@ private:
     void set_duration(double t);
     void set_title(std::wstring title);
     void set_paused(bool paused);
+    void set_speed_state(double speed);
+    void apply_speed(double speed);
+    void set_video_size(int width, int height);
     void set_error(std::wstring error);
     void notify();
 

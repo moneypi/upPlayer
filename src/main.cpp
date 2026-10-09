@@ -4,12 +4,16 @@
 #include <commctrl.h>
 #include <commdlg.h>
 #include <dwmapi.h>
+#include <imm.h>
 #include <shellapi.h>
 #include <windowsx.h>
 
+#include <algorithm>
+#include <cmath>
 #include <string>
 #include <vector>
 
+#pragma comment(lib, "imm32.lib")
 #pragma comment(linker, "\"/manifestdependency:type='win32' " \
     "name='Microsoft.Windows.Common-Controls' version='6.0.0.0' " \
     "processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
@@ -107,6 +111,9 @@ private:
 
     LRESULT handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
     LRESULT handle_seek_bar(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
+    bool handle_playback_key(UINT message, WPARAM wparam);
+    void disable_ime(HWND hwnd);
+    void claim_keyboard_focus();
     void create_children();
     void layout();
     void update_title();
@@ -116,6 +123,9 @@ private:
     void open_url();
     void open_target(const std::wstring& target);
     void show_context_menu(int screen_x, int screen_y);
+    void resize_to_video_scale(double scale);
+    void enter_fullscreen(bool stretch);
+    void exit_fullscreen();
     int dpi() const;
     int seek_bar_height() const;
 
@@ -129,6 +139,9 @@ private:
     std::vector<std::wstring> pending_files_;
     bool seeking_ = false;
     double seek_preview_ = -1.0;
+    bool fullscreen_ = false;
+    RECT windowed_rect_{};
+    LONG windowed_style_ = 0;
 };
 
 int App::dpi() const {
@@ -197,6 +210,7 @@ bool App::create(int show, const std::vector<std::wstring>& files) {
 
     BOOL dark = TRUE;
     DwmSetWindowAttribute(hwnd_, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
+    disable_ime(hwnd_);
 
     ShowWindow(hwnd_, show);
     UpdateWindow(hwnd_);
@@ -221,10 +235,102 @@ int App::loop() {
     while (GetMessageW(&message, nullptr, 0, 0) > 0) {
         if (accel && TranslateAcceleratorW(hwnd_, accel, &message))
             continue;
+        if (handle_playback_key(message.message, message.wParam))
+            continue;
         TranslateMessage(&message);
         DispatchMessageW(&message);
     }
     return static_cast<int>(message.wParam);
+}
+
+void App::disable_ime(HWND hwnd) {
+    if (!hwnd)
+        return;
+    ImmAssociateContext(hwnd, nullptr);
+}
+
+void App::claim_keyboard_focus() {
+    if (!hwnd_ || GetForegroundWindow() != hwnd_)
+        return;
+    HWND focus = GetFocus();
+    if (focus == hwnd_ || focus == video_ || focus == seek_bar_)
+        return;
+    if (video_)
+        SetFocus(video_);
+}
+
+bool App::handle_playback_key(UINT message, WPARAM wparam) {
+    if (message == WM_CHAR) {
+        switch (wparam) {
+        case L'[':
+        case L'{':
+            player_.adjust_speed(-0.1);
+            return true;
+        case L']':
+        case L'}':
+            player_.adjust_speed(0.1);
+            return true;
+        case L'1':
+            resize_to_video_scale(0.5);
+            return true;
+        case L'2':
+            resize_to_video_scale(1.0);
+            return true;
+        case L'3':
+            resize_to_video_scale(1.5);
+            return true;
+        case L'4':
+            resize_to_video_scale(2.0);
+            return true;
+        case L'5':
+            enter_fullscreen(false);
+            return true;
+        case L'6':
+            enter_fullscreen(true);
+            return true;
+        default:
+            return false;
+        }
+    }
+    if (message != WM_KEYDOWN && message != WM_SYSKEYDOWN)
+        return false;
+    switch (wparam) {
+    case VK_OEM_4:
+        player_.adjust_speed(-0.1);
+        return true;
+    case VK_OEM_6:
+        player_.adjust_speed(0.1);
+        return true;
+    case VK_BACK:
+        player_.reset_speed();
+        return true;
+    case '1':
+    case VK_NUMPAD1:
+        resize_to_video_scale(0.5);
+        return true;
+    case '2':
+    case VK_NUMPAD2:
+        resize_to_video_scale(1.0);
+        return true;
+    case '3':
+    case VK_NUMPAD3:
+        resize_to_video_scale(1.5);
+        return true;
+    case '4':
+    case VK_NUMPAD4:
+        resize_to_video_scale(2.0);
+        return true;
+    case '5':
+    case VK_NUMPAD5:
+        enter_fullscreen(false);
+        return true;
+    case '6':
+    case VK_NUMPAD6:
+        enter_fullscreen(true);
+        return true;
+    default:
+        return false;
+    }
 }
 
 LRESULT CALLBACK App::WndProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
@@ -243,6 +349,11 @@ LRESULT CALLBACK App::WndProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpa
 }
 
 LRESULT CALLBACK App::VideoProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
+    if (message == WM_LBUTTONDOWN || message == WM_RBUTTONDOWN)
+        SetFocus(hwnd);
+    if (message == WM_PARENTNOTIFY &&
+        (LOWORD(wparam) == WM_LBUTTONDOWN || LOWORD(wparam) == WM_RBUTTONDOWN))
+        SetFocus(hwnd);
     if (message == WM_ERASEBKGND) {
         RECT rect{};
         GetClientRect(hwnd, &rect);
@@ -287,6 +398,8 @@ void App::create_children() {
                                 0, 0, 10, 10, hwnd_,
                                 reinterpret_cast<HMENU>(static_cast<INT_PTR>(kSeekBarId)),
                                 instance_, this);
+    disable_ime(video_);
+    disable_ime(seek_bar_);
 
     context_menu_ = CreatePopupMenu();
     AppendMenuW(context_menu_, MF_STRING, ID_FILE_OPEN, L"Open(&O)...\tCtrl+O");
@@ -294,6 +407,17 @@ void App::create_children() {
     AppendMenuW(context_menu_, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(context_menu_, MF_STRING, ID_PLAY_PAUSE, L"Play/Pause(&P)\tSpace");
     AppendMenuW(context_menu_, MF_STRING, ID_STOP, L"Stop(&S)");
+    AppendMenuW(context_menu_, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(context_menu_, MF_STRING, ID_SPEED_DOWN, L"Speed Down\t[");
+    AppendMenuW(context_menu_, MF_STRING, ID_SPEED_UP, L"Speed Up\t]");
+    AppendMenuW(context_menu_, MF_STRING, ID_SPEED_RESET, L"Speed 1x\tBackspace");
+    AppendMenuW(context_menu_, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(context_menu_, MF_STRING, ID_SIZE_05, L"Size 0.5x\t1");
+    AppendMenuW(context_menu_, MF_STRING, ID_SIZE_10, L"Size 1x\t2");
+    AppendMenuW(context_menu_, MF_STRING, ID_SIZE_15, L"Size 1.5x\t3");
+    AppendMenuW(context_menu_, MF_STRING, ID_SIZE_20, L"Size 2x\t4");
+    AppendMenuW(context_menu_, MF_STRING, ID_FULLSCREEN_NORMAL, L"Fullscreen\t5");
+    AppendMenuW(context_menu_, MF_STRING, ID_FULLSCREEN_STRETCH, L"Fullscreen Stretch\t6");
     AppendMenuW(context_menu_, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(context_menu_, MF_STRING, ID_FILE_EXIT, L"Exit(&X)");
 
@@ -307,6 +431,92 @@ void App::show_context_menu(int screen_x, int screen_y) {
     TrackPopupMenu(context_menu_, TPM_RIGHTBUTTON | TPM_LEFTALIGN | TPM_TOPALIGN,
                    screen_x, screen_y, 0, hwnd_, nullptr);
     PostMessageW(hwnd_, WM_NULL, 0, 0);
+}
+
+void App::exit_fullscreen() {
+    if (!fullscreen_ || !hwnd_)
+        return;
+    SetWindowLongW(hwnd_, GWL_STYLE, windowed_style_);
+    SetWindowPos(hwnd_, nullptr, windowed_rect_.left, windowed_rect_.top,
+                 windowed_rect_.right - windowed_rect_.left,
+                 windowed_rect_.bottom - windowed_rect_.top,
+                 SWP_NOZORDER | SWP_FRAMECHANGED);
+    fullscreen_ = false;
+    layout();
+}
+
+void App::enter_fullscreen(bool stretch) {
+    if (!hwnd_)
+        return;
+    player_.set_keepaspect(!stretch);
+    if (!fullscreen_) {
+        GetWindowRect(hwnd_, &windowed_rect_);
+        windowed_style_ = GetWindowLongW(hwnd_, GWL_STYLE);
+        SetWindowLongW(hwnd_, GWL_STYLE, (windowed_style_ & ~WS_OVERLAPPEDWINDOW) | WS_POPUP);
+        fullscreen_ = true;
+    }
+    HMONITOR monitor = MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO info{sizeof(info)};
+    if (!GetMonitorInfoW(monitor, &info))
+        return;
+    SetWindowPos(hwnd_, HWND_TOP, info.rcMonitor.left, info.rcMonitor.top,
+                 info.rcMonitor.right - info.rcMonitor.left,
+                 info.rcMonitor.bottom - info.rcMonitor.top,
+                 SWP_FRAMECHANGED);
+    layout();
+    claim_keyboard_focus();
+}
+
+void App::resize_to_video_scale(double scale) {
+    if (!hwnd_ || !(scale > 0.0))
+        return;
+    const PlayerState playback = player_.state();
+    if (playback.width <= 0 || playback.height <= 0)
+        return;
+
+    player_.set_keepaspect(true);
+    if (fullscreen_)
+        exit_fullscreen();
+
+    const int video_w = static_cast<int>(playback.width * scale + 0.5);
+    const int video_h = static_cast<int>(playback.height * scale + 0.5);
+    const int client_w = (std::max)(video_w, MulDiv(320, dpi(), 96));
+    const int client_h = video_h + seek_bar_height();
+
+    RECT frame{0, 0, client_w, client_h};
+    const DWORD style = static_cast<DWORD>(GetWindowLongW(hwnd_, GWL_STYLE));
+    const DWORD ex_style = static_cast<DWORD>(GetWindowLongW(hwnd_, GWL_EXSTYLE));
+    AdjustWindowRectExForDpi(&frame, style, FALSE, ex_style, dpi());
+
+    int width = frame.right - frame.left;
+    int height = frame.bottom - frame.top;
+
+    HMONITOR monitor = MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO info{sizeof(info)};
+    if (GetMonitorInfoW(monitor, &info)) {
+        const int work_w = info.rcWork.right - info.rcWork.left;
+        const int work_h = info.rcWork.bottom - info.rcWork.top;
+        if (width > work_w)
+            width = work_w;
+        if (height > work_h)
+            height = work_h;
+        RECT current{};
+        GetWindowRect(hwnd_, &current);
+        int x = current.left + (current.right - current.left - width) / 2;
+        int y = current.top + (current.bottom - current.top - height) / 2;
+        if (x < info.rcWork.left)
+            x = info.rcWork.left;
+        if (y < info.rcWork.top)
+            y = info.rcWork.top;
+        if (x + width > info.rcWork.right)
+            x = info.rcWork.right - width;
+        if (y + height > info.rcWork.bottom)
+            y = info.rcWork.bottom - height;
+        SetWindowPos(hwnd_, nullptr, x, y, width, height, SWP_NOZORDER | SWP_FRAMECHANGED);
+    } else {
+        SetWindowPos(hwnd_, nullptr, 0, 0, width, height, SWP_NOMOVE | SWP_NOZORDER | SWP_FRAMECHANGED);
+    }
+    layout();
 }
 
 void App::layout() {
@@ -327,6 +537,11 @@ void App::update_title() {
     std::wstring caption = L"upPlayer";
     if (!playback.title.empty() && playback.has_media)
         caption += L" - " + playback.title;
+    if (playback.has_media && playback.speed > 0.0 && std::fabs(playback.speed - 1.0) >= 0.05) {
+        wchar_t speed[32];
+        swprintf_s(speed, L" [%.1fx]", playback.speed);
+        caption += speed;
+    }
     if (caption != shown_title_) {
         shown_title_ = caption;
         SetWindowTextW(hwnd_, caption.c_str());
@@ -531,6 +746,33 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
         case ID_SEEK_FORWARD:
             player_.seek_relative(5.0);
             return 0;
+        case ID_SPEED_DOWN:
+            player_.adjust_speed(-0.1);
+            return 0;
+        case ID_SPEED_UP:
+            player_.adjust_speed(0.1);
+            return 0;
+        case ID_SPEED_RESET:
+            player_.reset_speed();
+            return 0;
+        case ID_SIZE_05:
+            resize_to_video_scale(0.5);
+            return 0;
+        case ID_SIZE_10:
+            resize_to_video_scale(1.0);
+            return 0;
+        case ID_SIZE_15:
+            resize_to_video_scale(1.5);
+            return 0;
+        case ID_SIZE_20:
+            resize_to_video_scale(2.0);
+            return 0;
+        case ID_FULLSCREEN_NORMAL:
+            enter_fullscreen(false);
+            return 0;
+        case ID_FULLSCREEN_STRETCH:
+            enter_fullscreen(true);
+            return 0;
         default:
             break;
         }
@@ -581,8 +823,13 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
         update_title();
         update_seek_bar();
         return 0;
+    case WM_PARENTNOTIFY:
+        if (LOWORD(wparam) == WM_LBUTTONDOWN || LOWORD(wparam) == WM_RBUTTONDOWN)
+            claim_keyboard_focus();
+        break;
     case WM_TIMER:
         if (wparam == kTimerStatus) {
+            claim_keyboard_focus();
             update_title();
             if (!seeking_)
                 update_seek_bar();

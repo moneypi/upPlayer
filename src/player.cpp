@@ -491,6 +491,7 @@ bool Player::start_libmpv(HWND video, std::wstring& error) {
     option_string("force-window", "no");
     option_string("hwdec", "auto-safe");
     option_string("osc", "yes");
+    option_string("input-vo-keyboard", "no");
 
     int64_t wid = static_cast<int64_t>(reinterpret_cast<intptr_t>(video));
     int rc = api_->set_option(ctx, "wid", MPV_FORMAT_INT64, &wid);
@@ -520,6 +521,9 @@ bool Player::start_libmpv(HWND video, std::wstring& error) {
     api_->observe_property(ctx, 2, "duration", MPV_FORMAT_DOUBLE);
     api_->observe_property(ctx, 3, "pause", MPV_FORMAT_FLAG);
     api_->observe_property(ctx, 4, "media-title", MPV_FORMAT_STRING);
+    api_->observe_property(ctx, 5, "speed", MPV_FORMAT_DOUBLE);
+    api_->observe_property(ctx, 6, "width", MPV_FORMAT_INT64);
+    api_->observe_property(ctx, 7, "height", MPV_FORMAT_INT64);
     running_.store(true);
     backend_exe_ = false;
     backend_label_ = L"libmpv";
@@ -556,7 +560,7 @@ bool Player::start_exe(HWND video, std::wstring& error) {
 
     std::wstring cmd = QuoteArg(mpv);
     cmd += L" --no-config --no-terminal --idle=yes --keep-open=yes --force-window=no";
-    cmd += L" --hwdec=auto-safe --osc=yes";
+    cmd += L" --hwdec=auto-safe --osc=yes --input-vo-keyboard=no --input-cursor=yes";
     cmd += L" --wid=" + std::to_wstring(static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(video)));
     cmd += L" --input-ipc-server=" + QuoteArg(pipe_name_);
     cmd += L" --log-file=" + QuoteArg(log_path_);
@@ -609,6 +613,9 @@ bool Player::start_exe(HWND video, std::wstring& error) {
     write_line("{\"command\":[\"observe_property\",2,\"duration\"]}");
     write_line("{\"command\":[\"observe_property\",3,\"pause\"]}");
     write_line("{\"command\":[\"observe_property\",4,\"media-title\"]}");
+    write_line("{\"command\":[\"observe_property\",5,\"speed\"]}");
+    write_line("{\"command\":[\"observe_property\",6,\"width\"]}");
+    write_line("{\"command\":[\"observe_property\",7,\"height\"]}");
 
     running_.store(true);
     backend_exe_ = true;
@@ -768,6 +775,12 @@ void Player::handle_ipc_line(const std::string& line) {
                 set_paused(data.boolean);
             else if (name == "media-title" && data.kind == JsonKind::String)
                 set_title(Utf8ToWide(data.text));
+            else if (name == "speed")
+                set_speed_state(data.kind == JsonKind::Number ? data.number : 1.0);
+            else if (name == "width")
+                set_video_size(data.kind == JsonKind::Number ? static_cast<int>(data.number) : 0, -1);
+            else if (name == "height")
+                set_video_size(-1, data.kind == JsonKind::Number ? static_cast<int>(data.number) : 0);
         } else if (event == "file-loaded") {
             on_file_loaded();
         } else if (event == "end-file") {
@@ -822,6 +835,8 @@ void Player::load_utf8(const std::string& utf8, const std::wstring& display, boo
         state_.time_pos = -1.0;
         state_.duration = -1.0;
         state_.paused = false;
+        state_.width = 0;
+        state_.height = 0;
     }
     notify();
     post({"loadfile", utf8});
@@ -926,6 +941,8 @@ void Player::stop_playback() {
         state_.time_pos = -1.0;
         state_.duration = -1.0;
         state_.paused = false;
+        state_.width = 0;
+        state_.height = 0;
     }
     notify();
 }
@@ -934,6 +951,54 @@ void Player::seek_relative(double seconds) {
     char buf[64];
     snprintf(buf, sizeof(buf), "%.3f", seconds);
     post({"seek", buf, "relative"});
+}
+
+void Player::adjust_speed(double delta) {
+    if (delta == 0.0)
+        return;
+    double current = 1.0;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (state_.speed > 0.0)
+            current = state_.speed;
+    }
+    apply_speed(std::round((current + delta) * 10.0) / 10.0);
+}
+
+void Player::reset_speed() {
+    apply_speed(1.0);
+}
+
+void Player::set_keepaspect(bool keep) {
+    if (!running_.load())
+        return;
+    if (!backend_exe_ && ctx_ && api_ && api_->set_property) {
+        int flag = keep ? 1 : 0;
+        api_->set_property(static_cast<mpv_handle*>(ctx_), "keepaspect", MPV_FORMAT_FLAG, &flag);
+    } else {
+        write_line(std::string("{\"command\":[\"set_property\",\"keepaspect\",") +
+                   (keep ? "true" : "false") + "]}");
+    }
+}
+
+void Player::apply_speed(double speed) {
+    if (!running_.load() || !(speed > 0.0))
+        return;
+    if (speed < 0.1)
+        speed = 0.1;
+    if (speed > 20.0)
+        speed = 20.0;
+    if (!backend_exe_ && ctx_ && api_ && api_->set_property) {
+        api_->set_property(static_cast<mpv_handle*>(ctx_), "speed", MPV_FORMAT_DOUBLE, &speed);
+    } else {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "%.4f", speed);
+        write_line(std::string("{\"command\":[\"set_property\",\"speed\",") + buf + "]}");
+    }
+    char osd[64];
+    snprintf(osd, sizeof(osd), "%.1fx", speed);
+    post({"show-text", osd, "800"});
+    set_speed_state(speed);
 }
 
 void Player::seek_absolute(double seconds) {
@@ -1121,6 +1186,35 @@ void Player::set_paused(bool paused) {
     notify();
 }
 
+void Player::set_speed_state(double speed) {
+    if (!(speed > 0.0))
+        speed = 1.0;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (std::fabs(state_.speed - speed) < 0.0005)
+            return;
+        state_.speed = speed;
+    }
+    notify();
+}
+
+void Player::set_video_size(int width, int height) {
+    bool changed = false;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (width >= 0 && state_.width != width) {
+            state_.width = width;
+            changed = true;
+        }
+        if (height >= 0 && state_.height != height) {
+            state_.height = height;
+            changed = true;
+        }
+    }
+    if (changed)
+        notify();
+}
+
 void Player::set_error(std::wstring error) {
     {
         std::lock_guard<std::mutex> lock(mu_);
@@ -1160,6 +1254,12 @@ void Player::poll() {
                     set_duration(*static_cast<double*>(prop->data));
                 else if (std::strcmp(prop->name, "pause") == 0 && prop->format == MPV_FORMAT_FLAG)
                     set_paused(*static_cast<int*>(prop->data) != 0);
+                else if (std::strcmp(prop->name, "speed") == 0 && prop->format == MPV_FORMAT_DOUBLE)
+                    set_speed_state(*static_cast<double*>(prop->data));
+                else if (std::strcmp(prop->name, "width") == 0 && prop->format == MPV_FORMAT_INT64)
+                    set_video_size(static_cast<int>(*static_cast<int64_t*>(prop->data)), -1);
+                else if (std::strcmp(prop->name, "height") == 0 && prop->format == MPV_FORMAT_INT64)
+                    set_video_size(-1, static_cast<int>(*static_cast<int64_t*>(prop->data)));
                 else if (std::strcmp(prop->name, "media-title") == 0 && api_->get_property_string && api_->free_fn) {
                     char* title = api_->get_property_string(ctx, "media-title");
                     if (title) {
