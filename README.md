@@ -56,7 +56,7 @@ Output: `build\dist\upPlayer-windows-x64.zip`
 | **Enter** / **double-click** | Toggle fullscreen |
 | **i** | Show stats (mpv default) |
 | **I** | Toggle stats on/off (mpv default) |
-| **9** / **0** | Volume −2 / +2 (mpv default; range 0–100) |
+| **↓** / **↑** | Volume −2 / +2 (range 0–100) |
 | **m** | Mute / unmute |
 | **Mouse wheel** | Volume up / down (over video or seek bar) |
 | **s** | Take snapshot (saved to Desktop) |
@@ -68,7 +68,7 @@ Output: `build\dist\upPlayer-windows-x64.zip`
 | **Ctrl+O** | Open file |
 | **Ctrl+U** | Open network address |
 
-Numpad **1–6** and **9** / **0** work the same as the top-row digits. Keyboard volume keys also work.
+Numpad **1–6** work the same as the top-row digits. Keyboard volume keys also work.
 
 Bottom bar: seek slider on the left, volume slider on the right (drag to set 0–100; muted shows empty). Clip In (green) / Out (orange) marks can be dragged on the seek bar; `,` / `.` nudge the selected mark by one frame (right-click → **Clip** to clear).
 

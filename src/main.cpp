@@ -22,7 +22,6 @@
 namespace {
 
 constexpr int kTimerStatus = 1;
-constexpr int kTimerClickPause = 2;
 constexpr int kSeekBarId = 3001;
 
 #ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
@@ -300,6 +299,7 @@ private:
     ClipMark clip_active_ = ClipMark::None;
     ClipMark clip_dragging_ = ClipMark::None;
     bool fullscreen_ = false;
+    bool suppress_click_pause_ = false;
     RECT windowed_rect_{};
     LONG windowed_style_ = 0;
 };
@@ -455,12 +455,6 @@ bool App::handle_playback_key(UINT message, WPARAM wparam) {
         case L'I':
             player_.toggle_stats();
             return true;
-        case L'9':
-            player_.adjust_volume(-2.0);
-            return true;
-        case L'0':
-            player_.adjust_volume(2.0);
-            return true;
         case L'm':
         case L'M':
             player_.toggle_mute();
@@ -515,15 +509,13 @@ bool App::handle_playback_key(UINT message, WPARAM wparam) {
         else
             player_.show_stats();
         return true;
-    case '9':
-    case VK_NUMPAD9:
-    case VK_VOLUME_DOWN:
-        player_.adjust_volume(-2.0);
-        return true;
-    case '0':
-    case VK_NUMPAD0:
+    case VK_UP:
     case VK_VOLUME_UP:
         player_.adjust_volume(2.0);
+        return true;
+    case VK_DOWN:
+    case VK_VOLUME_DOWN:
+        player_.adjust_volume(-2.0);
         return true;
     case 'M':
     case VK_VOLUME_MUTE:
@@ -562,20 +554,21 @@ LRESULT CALLBACK App::VideoProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM l
         SetFocus(hwnd);
     if (message == WM_LBUTTONUP && app) {
         SetFocus(hwnd);
-        // Delay play/pause so a double-click can toggle fullscreen instead.
-        SetTimer(hwnd, kTimerClickPause, GetDoubleClickTime(), nullptr);
+        if (app->suppress_click_pause_) {
+            app->suppress_click_pause_ = false;
+        } else if (app->player_.state().has_media) {
+            app->player_.toggle_pause();
+        }
         return 0;
     }
     if (message == WM_LBUTTONDBLCLK && app) {
-        KillTimer(hwnd, kTimerClickPause);
         SetFocus(hwnd);
-        app->toggle_fullscreen();
-        return 0;
-    }
-    if (message == WM_TIMER && wparam == kTimerClickPause) {
-        KillTimer(hwnd, kTimerClickPause);
-        if (app && app->player_.state().has_media)
+        // Undo the pause toggle from the first click of the double-click, then
+        // ignore the trailing LBUTTONUP so play state stays unchanged.
+        if (app->player_.state().has_media)
             app->player_.toggle_pause();
+        app->suppress_click_pause_ = true;
+        app->toggle_fullscreen();
         return 0;
     }
     if (message == WM_ERASEBKGND) {
@@ -658,8 +651,8 @@ void App::create_children() {
     AppendMenuW(size_menu, MF_STRING, ID_FULLSCREEN_STRETCH, L"Fullscreen Stretch\t6");
 
     HMENU volume_menu = CreatePopupMenu();
-    AppendMenuW(volume_menu, MF_STRING, ID_VOLUME_DOWN, L"Down\t9");
-    AppendMenuW(volume_menu, MF_STRING, ID_VOLUME_UP, L"Up\t0");
+    AppendMenuW(volume_menu, MF_STRING, ID_VOLUME_DOWN, L"Down\tDown");
+    AppendMenuW(volume_menu, MF_STRING, ID_VOLUME_UP, L"Up\tUp");
     AppendMenuW(volume_menu, MF_STRING, ID_VOLUME_MUTE, L"Mute\tm");
 
     HMENU clip_menu = CreatePopupMenu();
