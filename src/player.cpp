@@ -492,6 +492,9 @@ bool Player::start_libmpv(HWND video, std::wstring& error) {
     option_string("hwdec", "auto-safe");
     option_string("osc", "yes");
     option_string("input-vo-keyboard", "no");
+    option_string("screenshot-directory", "~~desktop/");
+    option_string("screenshot-template", "upPlayer-%F-%n");
+    option_string("screenshot-format", "jpg");
 
     int64_t wid = static_cast<int64_t>(reinterpret_cast<intptr_t>(video));
     int rc = api_->set_option(ctx, "wid", MPV_FORMAT_INT64, &wid);
@@ -524,6 +527,8 @@ bool Player::start_libmpv(HWND video, std::wstring& error) {
     api_->observe_property(ctx, 5, "speed", MPV_FORMAT_DOUBLE);
     api_->observe_property(ctx, 6, "width", MPV_FORMAT_INT64);
     api_->observe_property(ctx, 7, "height", MPV_FORMAT_INT64);
+    api_->observe_property(ctx, 8, "volume", MPV_FORMAT_DOUBLE);
+    api_->observe_property(ctx, 9, "mute", MPV_FORMAT_FLAG);
     running_.store(true);
     backend_exe_ = false;
     backend_label_ = L"libmpv";
@@ -561,6 +566,7 @@ bool Player::start_exe(HWND video, std::wstring& error) {
     std::wstring cmd = QuoteArg(mpv);
     cmd += L" --no-config --no-terminal --idle=yes --keep-open=yes --force-window=no";
     cmd += L" --hwdec=auto-safe --osc=yes --input-vo-keyboard=no --input-cursor=yes";
+    cmd += L" --screenshot-directory=~~desktop/ --screenshot-template=upPlayer-%F-%n --screenshot-format=jpg";
     cmd += L" --wid=" + std::to_wstring(static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(video)));
     cmd += L" --input-ipc-server=" + QuoteArg(pipe_name_);
     cmd += L" --log-file=" + QuoteArg(log_path_);
@@ -616,6 +622,8 @@ bool Player::start_exe(HWND video, std::wstring& error) {
     write_line("{\"command\":[\"observe_property\",5,\"speed\"]}");
     write_line("{\"command\":[\"observe_property\",6,\"width\"]}");
     write_line("{\"command\":[\"observe_property\",7,\"height\"]}");
+    write_line("{\"command\":[\"observe_property\",8,\"volume\"]}");
+    write_line("{\"command\":[\"observe_property\",9,\"mute\"]}");
 
     running_.store(true);
     backend_exe_ = true;
@@ -781,6 +789,10 @@ void Player::handle_ipc_line(const std::string& line) {
                 set_video_size(data.kind == JsonKind::Number ? static_cast<int>(data.number) : 0, -1);
             else if (name == "height")
                 set_video_size(-1, data.kind == JsonKind::Number ? static_cast<int>(data.number) : 0);
+            else if (name == "volume")
+                set_volume_state(data.kind == JsonKind::Number ? data.number : 100.0);
+            else if (name == "mute" && data.kind == JsonKind::Bool)
+                set_mute_state(data.boolean);
         } else if (event == "file-loaded") {
             on_file_loaded();
         } else if (event == "end-file") {
@@ -987,6 +999,93 @@ void Player::show_stats() {
 
 void Player::toggle_stats() {
     post({"script-binding", "stats/display-stats-toggle"});
+}
+
+void Player::adjust_volume(double delta) {
+    if (delta == 0.0)
+        return;
+    double current = 100.0;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (state_.volume >= 0.0)
+            current = state_.volume;
+    }
+    apply_volume(std::round(current + delta), true);
+}
+
+void Player::set_volume(double volume, bool show_osd) {
+    apply_volume(volume, show_osd);
+}
+
+void Player::take_snapshot() {
+    post({"screenshot"});
+    post({"show-text", "Snapshot saved to Desktop", "1200"});
+}
+
+void Player::toggle_mute() {
+    bool muted = false;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        muted = !state_.mute;
+    }
+    if (!running_.load())
+        return;
+    if (!backend_exe_ && ctx_ && api_ && api_->set_property) {
+        int flag = muted ? 1 : 0;
+        api_->set_property(static_cast<mpv_handle*>(ctx_), "mute", MPV_FORMAT_FLAG, &flag);
+    } else {
+        write_line(std::string("{\"command\":[\"set_property\",\"mute\",") +
+                   (muted ? "true" : "false") + "]}");
+    }
+    set_mute_state(muted);
+    if (muted) {
+        post({"show-text", "Mute", "800"});
+    } else {
+        char osd[64];
+        double volume = 100.0;
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            volume = state_.volume;
+        }
+        snprintf(osd, sizeof(osd), "Volume: %.0f%%", volume);
+        post({"show-text", osd, "800"});
+    }
+}
+
+void Player::apply_volume(double volume, bool show_osd) {
+    if (!running_.load())
+        return;
+    if (volume < 0.0)
+        volume = 0.0;
+    if (volume > 100.0)
+        volume = 100.0;
+    bool was_muted = false;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        was_muted = state_.mute;
+    }
+    if (!backend_exe_ && ctx_ && api_ && api_->set_property) {
+        api_->set_property(static_cast<mpv_handle*>(ctx_), "volume", MPV_FORMAT_DOUBLE, &volume);
+        if (was_muted && volume > 0.0) {
+            int flag = 0;
+            api_->set_property(static_cast<mpv_handle*>(ctx_), "mute", MPV_FORMAT_FLAG, &flag);
+            set_mute_state(false);
+        }
+    } else {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "%.0f", volume);
+        write_line(std::string("{\"command\":[\"set_property\",\"volume\",") + buf + "]}");
+        if (was_muted && volume > 0.0) {
+            write_line("{\"command\":[\"set_property\",\"mute\",false]}");
+            set_mute_state(false);
+        }
+    }
+    if (show_osd) {
+        char osd[64];
+        snprintf(osd, sizeof(osd), "Volume: %.0f%%", volume);
+        post({"show-text", osd, "800"});
+    }
+    set_volume_state(volume);
 }
 
 void Player::apply_speed(double speed) {
@@ -1223,6 +1322,28 @@ void Player::set_video_size(int width, int height) {
         notify();
 }
 
+void Player::set_volume_state(double volume) {
+    if (!(volume >= 0.0))
+        volume = 0.0;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (std::fabs(state_.volume - volume) < 0.05)
+            return;
+        state_.volume = volume;
+    }
+    notify();
+}
+
+void Player::set_mute_state(bool mute) {
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (state_.mute == mute)
+            return;
+        state_.mute = mute;
+    }
+    notify();
+}
+
 void Player::set_error(std::wstring error) {
     {
         std::lock_guard<std::mutex> lock(mu_);
@@ -1268,6 +1389,10 @@ void Player::poll() {
                     set_video_size(static_cast<int>(*static_cast<int64_t*>(prop->data)), -1);
                 else if (std::strcmp(prop->name, "height") == 0 && prop->format == MPV_FORMAT_INT64)
                     set_video_size(-1, static_cast<int>(*static_cast<int64_t*>(prop->data)));
+                else if (std::strcmp(prop->name, "volume") == 0 && prop->format == MPV_FORMAT_DOUBLE)
+                    set_volume_state(*static_cast<double*>(prop->data));
+                else if (std::strcmp(prop->name, "mute") == 0 && prop->format == MPV_FORMAT_FLAG)
+                    set_mute_state(*static_cast<int*>(prop->data) != 0);
                 else if (std::strcmp(prop->name, "media-title") == 0 && api_->get_property_string && api_->free_fn) {
                     char* title = api_->get_property_string(ctx, "media-title");
                     if (title) {

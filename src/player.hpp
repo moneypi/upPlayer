@@ -18,6 +18,8 @@ struct PlayerState {
     bool paused = false;
     bool has_media = false;
     double speed = 1.0;
+    double volume = 100.0;
+    bool mute = false;
     int width = 0;
     int height = 0;
 };
@@ -51,6 +53,10 @@ public:
     void set_keepaspect(bool keep);
     void show_stats();
     void toggle_stats();
+    void adjust_volume(double delta);
+    void set_volume(double volume, bool show_osd = true);
+    void toggle_mute();
+    void take_snapshot();
 
     void poll();
     void consume_notify();
@@ -88,6 +94,9 @@ private:
     void set_speed_state(double speed);
     void apply_speed(double speed);
     void set_video_size(int width, int height);
+    void set_volume_state(double volume);
+    void set_mute_state(bool mute);
+    void apply_volume(double volume, bool show_osd);
     void set_error(std::wstring error);
     void notify();
 

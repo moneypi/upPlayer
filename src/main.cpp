@@ -119,6 +119,10 @@ private:
     void update_title();
     void update_seek_bar();
     void seek_from_point(int x);
+    void volume_from_point(int x, bool show_osd);
+    bool hit_volume_slider(int x) const;
+    void bar_metrics(int width, int& pad, int& time_width, int& seek_left, int& seek_right,
+                     int& vol_left, int& vol_right) const;
     void open_file();
     void open_url();
     void open_target(const std::wstring& target);
@@ -138,7 +142,9 @@ private:
     std::wstring shown_title_;
     std::vector<std::wstring> pending_files_;
     bool seeking_ = false;
+    bool volume_dragging_ = false;
     double seek_preview_ = -1.0;
+    double volume_preview_ = -1.0;
     bool fullscreen_ = false;
     RECT windowed_rect_{};
     LONG windowed_style_ = 0;
@@ -294,6 +300,20 @@ bool App::handle_playback_key(UINT message, WPARAM wparam) {
         case L'I':
             player_.toggle_stats();
             return true;
+        case L'9':
+            player_.adjust_volume(-2.0);
+            return true;
+        case L'0':
+            player_.adjust_volume(2.0);
+            return true;
+        case L'm':
+        case L'M':
+            player_.toggle_mute();
+            return true;
+        case L's':
+        case L'S':
+            player_.take_snapshot();
+            return true;
         default:
             return false;
         }
@@ -340,6 +360,23 @@ bool App::handle_playback_key(UINT message, WPARAM wparam) {
         else
             player_.show_stats();
         return true;
+    case '9':
+    case VK_NUMPAD9:
+    case VK_VOLUME_DOWN:
+        player_.adjust_volume(-2.0);
+        return true;
+    case '0':
+    case VK_NUMPAD0:
+    case VK_VOLUME_UP:
+        player_.adjust_volume(2.0);
+        return true;
+    case 'M':
+    case VK_VOLUME_MUTE:
+        player_.toggle_mute();
+        return true;
+    case 'S':
+        player_.take_snapshot();
+        return true;
     default:
         return false;
     }
@@ -371,6 +408,19 @@ LRESULT CALLBACK App::VideoProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM l
         GetClientRect(hwnd, &rect);
         FillRect(reinterpret_cast<HDC>(wparam), &rect, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
         return 1;
+    }
+    if (message == WM_MOUSEWHEEL) {
+        HWND parent = GetParent(hwnd);
+        auto* app = parent ? reinterpret_cast<App*>(GetWindowLongPtrW(parent, GWLP_USERDATA)) : nullptr;
+        if (app) {
+            const int delta = GET_WHEEL_DELTA_WPARAM(wparam);
+            if (delta > 0)
+                app->player_.adjust_volume(2.0);
+            else if (delta < 0)
+                app->player_.adjust_volume(-2.0);
+            SetFocus(hwnd);
+            return 0;
+        }
     }
     if (message == WM_CONTEXTMENU) {
         HWND parent = GetParent(hwnd);
@@ -413,28 +463,46 @@ void App::create_children() {
     disable_ime(video_);
     disable_ime(seek_bar_);
 
+    HMENU playback_menu = CreatePopupMenu();
+    AppendMenuW(playback_menu, MF_STRING, ID_PLAY_PAUSE, L"Play/Pause\tSpace");
+    AppendMenuW(playback_menu, MF_STRING, ID_STOP, L"Stop");
+    AppendMenuW(playback_menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(playback_menu, MF_STRING, ID_SEEK_BACK, L"Seek -5s\tLeft");
+    AppendMenuW(playback_menu, MF_STRING, ID_SEEK_FORWARD, L"Seek +5s\tRight");
+    AppendMenuW(playback_menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(playback_menu, MF_STRING, ID_STATS_SHOW, L"Stats\ti");
+    AppendMenuW(playback_menu, MF_STRING, ID_STATS_TOGGLE, L"Stats Toggle\tI");
+
+    HMENU speed_menu = CreatePopupMenu();
+    AppendMenuW(speed_menu, MF_STRING, ID_SPEED_DOWN, L"Slower\t[");
+    AppendMenuW(speed_menu, MF_STRING, ID_SPEED_UP, L"Faster\t]");
+    AppendMenuW(speed_menu, MF_STRING, ID_SPEED_RESET, L"Reset 1x\tBackspace");
+
+    HMENU size_menu = CreatePopupMenu();
+    AppendMenuW(size_menu, MF_STRING, ID_SIZE_05, L"0.5x\t1");
+    AppendMenuW(size_menu, MF_STRING, ID_SIZE_10, L"1x\t2");
+    AppendMenuW(size_menu, MF_STRING, ID_SIZE_15, L"1.5x\t3");
+    AppendMenuW(size_menu, MF_STRING, ID_SIZE_20, L"2x\t4");
+    AppendMenuW(size_menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(size_menu, MF_STRING, ID_FULLSCREEN_NORMAL, L"Fullscreen\t5");
+    AppendMenuW(size_menu, MF_STRING, ID_FULLSCREEN_STRETCH, L"Fullscreen Stretch\t6");
+
+    HMENU volume_menu = CreatePopupMenu();
+    AppendMenuW(volume_menu, MF_STRING, ID_VOLUME_DOWN, L"Down\t9");
+    AppendMenuW(volume_menu, MF_STRING, ID_VOLUME_UP, L"Up\t0");
+    AppendMenuW(volume_menu, MF_STRING, ID_VOLUME_MUTE, L"Mute\tm");
+
     context_menu_ = CreatePopupMenu();
-    AppendMenuW(context_menu_, MF_STRING, ID_FILE_OPEN, L"Open(&O)...\tCtrl+O");
-    AppendMenuW(context_menu_, MF_STRING, ID_FILE_OPEN_URL, L"Open Network Address(&N)...\tCtrl+U");
+    AppendMenuW(context_menu_, MF_STRING, ID_FILE_OPEN, L"Open...\tCtrl+O");
+    AppendMenuW(context_menu_, MF_STRING, ID_FILE_OPEN_URL, L"Open Network Address...\tCtrl+U");
+    AppendMenuW(context_menu_, MF_STRING, ID_SNAPSHOT, L"Take Snapshot\ts");
     AppendMenuW(context_menu_, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(context_menu_, MF_STRING, ID_PLAY_PAUSE, L"Play/Pause(&P)\tSpace");
-    AppendMenuW(context_menu_, MF_STRING, ID_STOP, L"Stop(&S)");
+    AppendMenuW(context_menu_, MF_POPUP, reinterpret_cast<UINT_PTR>(playback_menu), L"Playback");
+    AppendMenuW(context_menu_, MF_POPUP, reinterpret_cast<UINT_PTR>(speed_menu), L"Speed");
+    AppendMenuW(context_menu_, MF_POPUP, reinterpret_cast<UINT_PTR>(size_menu), L"Size");
+    AppendMenuW(context_menu_, MF_POPUP, reinterpret_cast<UINT_PTR>(volume_menu), L"Volume");
     AppendMenuW(context_menu_, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(context_menu_, MF_STRING, ID_SPEED_DOWN, L"Speed Down\t[");
-    AppendMenuW(context_menu_, MF_STRING, ID_SPEED_UP, L"Speed Up\t]");
-    AppendMenuW(context_menu_, MF_STRING, ID_SPEED_RESET, L"Speed 1x\tBackspace");
-    AppendMenuW(context_menu_, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(context_menu_, MF_STRING, ID_SIZE_05, L"Size 0.5x\t1");
-    AppendMenuW(context_menu_, MF_STRING, ID_SIZE_10, L"Size 1x\t2");
-    AppendMenuW(context_menu_, MF_STRING, ID_SIZE_15, L"Size 1.5x\t3");
-    AppendMenuW(context_menu_, MF_STRING, ID_SIZE_20, L"Size 2x\t4");
-    AppendMenuW(context_menu_, MF_STRING, ID_FULLSCREEN_NORMAL, L"Fullscreen\t5");
-    AppendMenuW(context_menu_, MF_STRING, ID_FULLSCREEN_STRETCH, L"Fullscreen Stretch\t6");
-    AppendMenuW(context_menu_, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(context_menu_, MF_STRING, ID_STATS_SHOW, L"Stats\ti");
-    AppendMenuW(context_menu_, MF_STRING, ID_STATS_TOGGLE, L"Stats Toggle\tI");
-    AppendMenuW(context_menu_, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(context_menu_, MF_STRING, ID_FILE_EXIT, L"Exit(&X)");
+    AppendMenuW(context_menu_, MF_STRING, ID_FILE_EXIT, L"Exit");
 
     DragAcceptFiles(hwnd_, TRUE);
 }
@@ -568,25 +636,64 @@ void App::update_seek_bar() {
         InvalidateRect(seek_bar_, nullptr, FALSE);
 }
 
+void App::bar_metrics(int width, int& pad, int& time_width, int& seek_left, int& seek_right,
+                      int& vol_left, int& vol_right) const {
+    pad = MulDiv(12, dpi(), 96);
+    time_width = MulDiv(54, dpi(), 96);
+    const int vol_width = MulDiv(84, dpi(), 96);
+    const int vol_gap = MulDiv(10, dpi(), 96);
+    vol_right = width - pad;
+    vol_left = vol_right - vol_width;
+    seek_left = pad + time_width;
+    seek_right = vol_left - vol_gap - time_width;
+    if (seek_right < seek_left)
+        seek_right = seek_left;
+}
+
+bool App::hit_volume_slider(int x) const {
+    if (!seek_bar_)
+        return false;
+    RECT rect{};
+    GetClientRect(seek_bar_, &rect);
+    int pad = 0, time_width = 0, seek_left = 0, seek_right = 0, vol_left = 0, vol_right = 0;
+    bar_metrics(rect.right, pad, time_width, seek_left, seek_right, vol_left, vol_right);
+    return x >= vol_left - MulDiv(4, dpi(), 96) && x <= vol_right + MulDiv(4, dpi(), 96);
+}
+
 void App::seek_from_point(int x) {
     const PlayerState playback = player_.state();
     if (!(playback.duration > 0.0))
         return;
     RECT rect{};
     GetClientRect(seek_bar_, &rect);
-    const int pad = MulDiv(12, dpi(), 96);
-    const int time_width = MulDiv(54, dpi(), 96);
-    const int left = pad + time_width;
-    const int right = rect.right - pad - time_width;
-    if (right <= left)
+    int pad = 0, time_width = 0, seek_left = 0, seek_right = 0, vol_left = 0, vol_right = 0;
+    bar_metrics(rect.right, pad, time_width, seek_left, seek_right, vol_left, vol_right);
+    if (seek_right <= seek_left)
         return;
-    double ratio = static_cast<double>(x - left) / static_cast<double>(right - left);
+    double ratio = static_cast<double>(x - seek_left) / static_cast<double>(seek_right - seek_left);
     if (ratio < 0.0)
         ratio = 0.0;
     if (ratio > 1.0)
         ratio = 1.0;
     seek_preview_ = ratio * playback.duration;
     player_.seek_absolute(seek_preview_);
+    update_seek_bar();
+}
+
+void App::volume_from_point(int x, bool show_osd) {
+    RECT rect{};
+    GetClientRect(seek_bar_, &rect);
+    int pad = 0, time_width = 0, seek_left = 0, seek_right = 0, vol_left = 0, vol_right = 0;
+    bar_metrics(rect.right, pad, time_width, seek_left, seek_right, vol_left, vol_right);
+    if (vol_right <= vol_left)
+        return;
+    double ratio = static_cast<double>(x - vol_left) / static_cast<double>(vol_right - vol_left);
+    if (ratio < 0.0)
+        ratio = 0.0;
+    if (ratio > 1.0)
+        ratio = 1.0;
+    volume_preview_ = std::round(ratio * 100.0);
+    player_.set_volume(volume_preview_, show_osd);
     update_seek_bar();
 }
 
@@ -606,36 +713,45 @@ LRESULT App::handle_seek_bar(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
         const double position = seeking_ && seek_preview_ >= 0.0
                                     ? seek_preview_
                                     : (playback.time_pos >= 0.0 ? playback.time_pos : 0.0);
-        const int pad = MulDiv(12, dpi(), 96);
-        const int time_width = MulDiv(54, dpi(), 96);
+        const double volume = volume_dragging_ && volume_preview_ >= 0.0
+                                  ? volume_preview_
+                                  : (playback.volume >= 0.0 ? playback.volume : 100.0);
+        int pad = 0, time_width = 0, seek_left = 0, seek_right = 0, vol_left = 0, vol_right = 0;
+        bar_metrics(rect.right, pad, time_width, seek_left, seek_right, vol_left, vol_right);
         const int track_height = MulDiv(4, dpi(), 96);
         const int track_y = (rect.bottom - track_height) / 2;
-        RECT track{pad + time_width, track_y, rect.right - pad - time_width, track_y + track_height};
-        if (track.right > track.left) {
+        const int knob = MulDiv(10, dpi(), 96);
+
+        auto draw_track = [&](int left, int right, double ratio, COLORREF fill) {
+            if (right <= left)
+                return;
+            RECT track{left, track_y, right, track_y + track_height};
             const HBRUSH track_brush = CreateSolidBrush(RGB(48, 52, 60));
             FillRect(dc, &track, track_brush);
             DeleteObject(track_brush);
+            if (ratio < 0.0)
+                ratio = 0.0;
+            if (ratio > 1.0)
+                ratio = 1.0;
+            const int filled = left + static_cast<int>((right - left) * ratio + 0.5);
+            RECT progress{left, track_y, filled, track_y + track_height};
+            const HBRUSH progress_brush = CreateSolidBrush(fill);
+            FillRect(dc, &progress, progress_brush);
+            DeleteObject(progress_brush);
+            const RECT knob_rect{filled - knob / 2, track_y + track_height / 2 - knob / 2,
+                                 filled + (knob + 1) / 2, track_y + track_height / 2 + (knob + 1) / 2};
+            const HBRUSH knob_brush = CreateSolidBrush(RGB(230, 240, 250));
+            FillRect(dc, &knob_rect, knob_brush);
+            DeleteObject(knob_brush);
+        };
 
-            if (duration > 0.0) {
-                double ratio = position / duration;
-                if (ratio < 0.0)
-                    ratio = 0.0;
-                if (ratio > 1.0)
-                    ratio = 1.0;
-                const int filled = track.left + static_cast<int>((track.right - track.left) * ratio + 0.5);
-                RECT progress{track.left, track.top, filled, track.bottom};
-                const HBRUSH progress_brush = CreateSolidBrush(RGB(90, 200, 250));
-                FillRect(dc, &progress, progress_brush);
-                DeleteObject(progress_brush);
+        if (duration > 0.0)
+            draw_track(seek_left, seek_right, position / duration, RGB(90, 200, 250));
+        else
+            draw_track(seek_left, seek_right, 0.0, RGB(90, 200, 250));
 
-                const int knob = MulDiv(10, dpi(), 96);
-                const RECT knob_rect{filled - knob / 2, track_y + track_height / 2 - knob / 2,
-                                     filled + (knob + 1) / 2, track_y + track_height / 2 + (knob + 1) / 2};
-                const HBRUSH knob_brush = CreateSolidBrush(RGB(230, 240, 250));
-                FillRect(dc, &knob_rect, knob_brush);
-                DeleteObject(knob_brush);
-            }
-        }
+        const COLORREF vol_color = playback.mute ? RGB(120, 120, 128) : RGB(120, 210, 150);
+        draw_track(vol_left, vol_right, playback.mute ? 0.0 : (volume / 100.0), vol_color);
 
         SetBkMode(dc, TRANSPARENT);
         SetTextColor(dc, RGB(180, 188, 196));
@@ -646,7 +762,7 @@ LRESULT App::handle_seek_bar(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
         const std::wstring left = FormatTime(position);
         const std::wstring right = FormatTime(duration > 0.0 ? duration : -1.0);
         RECT left_rect{pad, 0, pad + time_width - MulDiv(6, dpi(), 96), rect.bottom};
-        RECT right_rect{rect.right - pad - time_width + MulDiv(6, dpi(), 96), 0, rect.right - pad, rect.bottom};
+        RECT right_rect{seek_right + MulDiv(6, dpi(), 96), 0, vol_left - MulDiv(6, dpi(), 96), rect.bottom};
         DrawTextW(dc, left.c_str(), -1, &left_rect, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
         DrawTextW(dc, right.c_str(), -1, &right_rect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         SelectObject(dc, old);
@@ -654,17 +770,32 @@ LRESULT App::handle_seek_bar(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
         EndPaint(hwnd, &paint);
         return 0;
     }
-    case WM_LBUTTONDOWN:
+    case WM_LBUTTONDOWN: {
+        const int x = GET_X_LPARAM(lparam);
         SetCapture(hwnd);
-        seeking_ = true;
-        seek_from_point(GET_X_LPARAM(lparam));
+        if (hit_volume_slider(x)) {
+            volume_dragging_ = true;
+            volume_from_point(x, false);
+        } else {
+            seeking_ = true;
+            seek_from_point(x);
+        }
         return 0;
+    }
     case WM_MOUSEMOVE:
-        if (seeking_ && (wparam & MK_LBUTTON))
+        if (volume_dragging_ && (wparam & MK_LBUTTON))
+            volume_from_point(GET_X_LPARAM(lparam), false);
+        else if (seeking_ && (wparam & MK_LBUTTON))
             seek_from_point(GET_X_LPARAM(lparam));
         return 0;
     case WM_LBUTTONUP:
-        if (seeking_) {
+        if (volume_dragging_) {
+            volume_dragging_ = false;
+            volume_from_point(GET_X_LPARAM(lparam), true);
+            volume_preview_ = -1.0;
+            ReleaseCapture();
+            update_seek_bar();
+        } else if (seeking_) {
             seeking_ = false;
             seek_from_point(GET_X_LPARAM(lparam));
             seek_preview_ = -1.0;
@@ -674,8 +805,19 @@ LRESULT App::handle_seek_bar(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
         return 0;
     case WM_CAPTURECHANGED:
         seeking_ = false;
+        volume_dragging_ = false;
         seek_preview_ = -1.0;
+        volume_preview_ = -1.0;
         return 0;
+    case WM_MOUSEWHEEL: {
+        const int delta = GET_WHEEL_DELTA_WPARAM(wparam);
+        if (delta > 0)
+            player_.adjust_volume(2.0);
+        else if (delta < 0)
+            player_.adjust_volume(-2.0);
+        update_seek_bar();
+        return 0;
+    }
     case WM_ERASEBKGND:
         return 1;
     default:
@@ -793,6 +935,18 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
             return 0;
         case ID_STATS_TOGGLE:
             player_.toggle_stats();
+            return 0;
+        case ID_VOLUME_DOWN:
+            player_.adjust_volume(-2.0);
+            return 0;
+        case ID_VOLUME_UP:
+            player_.adjust_volume(2.0);
+            return 0;
+        case ID_VOLUME_MUTE:
+            player_.toggle_mute();
+            return 0;
+        case ID_SNAPSHOT:
+            player_.take_snapshot();
             return 0;
         default:
             break;

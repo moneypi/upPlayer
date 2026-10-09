@@ -53,9 +53,15 @@ Package lite/full zips (full pulls official mpv Windows builds):
 | **6** | Fullscreen stretch |
 | **i** | Show stats (mpv default) |
 | **I** | Toggle stats on/off (mpv default) |
+| **9** / **0** | Volume −2 / +2 (mpv default; range 0–100) |
+| **m** | Mute / unmute |
+| **Mouse wheel** | Volume up / down (over video or seek bar) |
+| **s** | Take snapshot (saved to Desktop) |
 | **Ctrl+O** | Open file |
 | **Ctrl+U** | Open network address |
 
-Numpad **1–6** work the same as the top-row digits. Size/fullscreen shortcuts follow QQ影音-style behavior.
+Numpad **1–6** and **9** / **0** work the same as the top-row digits. Keyboard volume keys also work.
+
+Bottom bar: seek slider on the left, volume slider on the right (drag to set 0–100; muted shows empty).
 
 When speed is not 1x, the window title shows the current rate (for example `[1.5x]`), and a short on-screen label appears after changing speed.
