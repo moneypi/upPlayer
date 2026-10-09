@@ -49,6 +49,8 @@ public:
     void adjust_speed(double delta);
     void reset_speed();
     void set_keepaspect(bool keep);
+    void show_stats();
+    void toggle_stats();
 
     void poll();
     void consume_notify();

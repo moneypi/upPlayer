@@ -288,6 +288,12 @@ bool App::handle_playback_key(UINT message, WPARAM wparam) {
         case L'6':
             enter_fullscreen(true);
             return true;
+        case L'i':
+            player_.show_stats();
+            return true;
+        case L'I':
+            player_.toggle_stats();
+            return true;
         default:
             return false;
         }
@@ -327,6 +333,12 @@ bool App::handle_playback_key(UINT message, WPARAM wparam) {
     case '6':
     case VK_NUMPAD6:
         enter_fullscreen(true);
+        return true;
+    case 'I':
+        if (GetKeyState(VK_SHIFT) & 0x8000)
+            player_.toggle_stats();
+        else
+            player_.show_stats();
         return true;
     default:
         return false;
@@ -418,6 +430,9 @@ void App::create_children() {
     AppendMenuW(context_menu_, MF_STRING, ID_SIZE_20, L"Size 2x\t4");
     AppendMenuW(context_menu_, MF_STRING, ID_FULLSCREEN_NORMAL, L"Fullscreen\t5");
     AppendMenuW(context_menu_, MF_STRING, ID_FULLSCREEN_STRETCH, L"Fullscreen Stretch\t6");
+    AppendMenuW(context_menu_, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(context_menu_, MF_STRING, ID_STATS_SHOW, L"Stats\ti");
+    AppendMenuW(context_menu_, MF_STRING, ID_STATS_TOGGLE, L"Stats Toggle\tI");
     AppendMenuW(context_menu_, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(context_menu_, MF_STRING, ID_FILE_EXIT, L"Exit(&X)");
 
@@ -772,6 +787,12 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
             return 0;
         case ID_FULLSCREEN_STRETCH:
             enter_fullscreen(true);
+            return 0;
+        case ID_STATS_SHOW:
+            player_.show_stats();
+            return 0;
+        case ID_STATS_TOGGLE:
+            player_.toggle_stats();
             return 0;
         default:
             break;

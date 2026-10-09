@@ -51,6 +51,8 @@ Package lite/full zips (full pulls official mpv Windows builds):
 | **4** | Window size 2× video |
 | **5** | Fullscreen (keep aspect) |
 | **6** | Fullscreen stretch |
+| **i** | Show stats (mpv default) |
+| **I** | Toggle stats on/off (mpv default) |
 | **Ctrl+O** | Open file |
 | **Ctrl+U** | Open network address |
 

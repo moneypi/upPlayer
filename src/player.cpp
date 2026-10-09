@@ -981,6 +981,14 @@ void Player::set_keepaspect(bool keep) {
     }
 }
 
+void Player::show_stats() {
+    post({"script-binding", "stats/display-stats"});
+}
+
+void Player::toggle_stats() {
+    post({"script-binding", "stats/display-stats-toggle"});
+}
+
 void Player::apply_speed(double speed) {
     if (!running_.load() || !(speed > 0.0))
         return;
