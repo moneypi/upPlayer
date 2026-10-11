@@ -423,14 +423,6 @@ void App::claim_keyboard_focus() {
 bool App::handle_playback_key(UINT message, WPARAM wparam) {
     if (message == WM_CHAR) {
         switch (wparam) {
-        case L'[':
-        case L'{':
-            player_.adjust_speed(-0.1);
-            return true;
-        case L']':
-        case L'}':
-            player_.adjust_speed(0.1);
-            return true;
         case L'1':
             resize_to_video_scale(0.5);
             return true;
@@ -470,12 +462,6 @@ bool App::handle_playback_key(UINT message, WPARAM wparam) {
     if (message != WM_KEYDOWN && message != WM_SYSKEYDOWN)
         return false;
     switch (wparam) {
-    case VK_OEM_4:
-        player_.adjust_speed(-0.1);
-        return true;
-    case VK_OEM_6:
-        player_.adjust_speed(0.1);
-        return true;
     case VK_BACK:
         player_.reset_speed();
         return true;
@@ -510,10 +496,22 @@ bool App::handle_playback_key(UINT message, WPARAM wparam) {
             player_.show_stats();
         return true;
     case VK_UP:
+        if (GetKeyState(VK_CONTROL) & 0x8000) {
+            player_.adjust_speed(0.1);
+            return true;
+        }
+        player_.adjust_volume(2.0);
+        return true;
     case VK_VOLUME_UP:
         player_.adjust_volume(2.0);
         return true;
     case VK_DOWN:
+        if (GetKeyState(VK_CONTROL) & 0x8000) {
+            player_.adjust_speed(-0.1);
+            return true;
+        }
+        player_.adjust_volume(-2.0);
+        return true;
     case VK_VOLUME_DOWN:
         player_.adjust_volume(-2.0);
         return true;
@@ -636,8 +634,8 @@ void App::create_children() {
     AppendMenuW(playback_menu, MF_STRING, ID_STATS_TOGGLE, L"Stats Toggle\tI");
 
     HMENU speed_menu = CreatePopupMenu();
-    AppendMenuW(speed_menu, MF_STRING, ID_SPEED_DOWN, L"Slower\t[");
-    AppendMenuW(speed_menu, MF_STRING, ID_SPEED_UP, L"Faster\t]");
+    AppendMenuW(speed_menu, MF_STRING, ID_SPEED_DOWN, L"Slower\tCtrl+Down");
+    AppendMenuW(speed_menu, MF_STRING, ID_SPEED_UP, L"Faster\tCtrl+Up");
     AppendMenuW(speed_menu, MF_STRING, ID_SPEED_RESET, L"Reset 1x\tBackspace");
 
     HMENU size_menu = CreatePopupMenu();

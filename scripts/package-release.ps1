@@ -13,10 +13,16 @@ if (-not $OutDir) {
     $OutDir = Join-Path $Root "build\dist"
 }
 
-$Exe = Join-Path $Root "build\$Configuration\upPlayer.exe"
-if (-not (Test-Path $Exe)) {
-    throw "Missing $Exe. Build the project first."
+$ExeCandidates = @(
+    (Join-Path $Root "build\$Configuration\upPlayer.exe"),
+    (Join-Path $Root "out\$Configuration\upPlayer.exe"),
+    (Join-Path $Root "out\upPlayer.exe")
+)
+$Exe = $ExeCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $Exe) {
+    throw "Missing upPlayer.exe. Build the project first (looked in build\$Configuration, out\$Configuration, out)."
 }
+Write-Host "Using $Exe"
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
@@ -26,7 +32,7 @@ function Get-Release([string]$tag) {
     } else {
         "https://api.github.com/repos/mpv-player/mpv/releases/tags/$tag"
     }
-    $json = curl.exe -sS --http1.1 --ssl-no-revoke -H "Accept: application/vnd.github+json" $url
+    $json = Invoke-GitHubApi $url
     $release = $json | ConvertFrom-Json
     if (-not $release.tag_name) {
         throw "Failed to query mpv release ($tag): $json"
@@ -52,7 +58,8 @@ function Download-File([string]$Url, [string]$Destination) {
     foreach ($candidate in $urls) {
         Write-Host "Trying $candidate"
         Remove-Item $Destination -Force -ErrorAction SilentlyContinue
-        & curl.exe -L --http1.1 --ssl-no-revoke --connect-timeout 30 --retry 2 --retry-delay 2 `
+        & curl.exe -L --http1.1 --ssl-no-revoke --noproxy "*" --connect-timeout 30 --retry 2 --retry-delay 2 `
+            --resolve "github.com:443:140.82.113.3" `
             -o $Destination $candidate
         if ((Test-Path $Destination) -and ((Get-Item $Destination).Length -gt 1MB)) {
             return
@@ -61,14 +68,23 @@ function Download-File([string]$Url, [string]$Destination) {
     throw "Download failed for $Url"
 }
 
+function Invoke-GitHubApi([string]$Url) {
+    $json = curl.exe -sS --http1.1 --ssl-no-revoke --noproxy "*" `
+        --resolve "github.com:443:140.82.113.3" `
+        -H "Accept: application/vnd.github+json" $Url
+    if (-not $json) {
+        throw "Empty response from $Url"
+    }
+    return $json
+}
+
 Write-Host "Querying official mpv-player/mpv release ($ReleaseTag)..."
 $release = Get-Release $ReleaseTag
 $asset = Find-WindowsAsset $release
 
 if (-not $asset) {
     Write-Host "No Windows x64 asset on $($release.tag_name); scanning recent releases..."
-    $listJson = curl.exe -sS --http1.1 --ssl-no-revoke -H "Accept: application/vnd.github+json" `
-        "https://api.github.com/repos/mpv-player/mpv/releases?per_page=10"
+    $listJson = Invoke-GitHubApi "https://api.github.com/repos/mpv-player/mpv/releases?per_page=10"
     $list = $listJson | ConvertFrom-Json
     foreach ($candidate in $list) {
         $asset = Find-WindowsAsset $candidate

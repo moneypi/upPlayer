@@ -28,6 +28,14 @@ Package a Windows zip (pulls official mpv Windows build + runtime DLLs):
 
 Output: `build\dist\upPlayer-windows-x64.zip`
 
+Build a Windows setup installer with **NSIS** (same Nullsoft installer family as PotPlayer; downloads NSIS if needed):
+
+```powershell
+.\scripts\package-setup.ps1
+```
+
+Output: `build\dist\upPlayer-Setup-x64.exe` (same files as the zip: `upPlayer.exe` + bundled mpv). Installs machine-wide to `C:\Program Files\upPlayer` (admin / UAC). Script: `scripts\upPlayer.nsi`.
+
 ## Run
 
 ```powershell
@@ -45,7 +53,7 @@ Output: `build\dist\upPlayer-windows-x64.zip`
 |-----|--------|
 | **Space** / **click video** | Play / pause |
 | **←** / **→** | Seek −5s / +5s |
-| **[** / **]** | Speed −0.1x / +0.1x (range 0.1x–20x) |
+| **Ctrl+↓** / **Ctrl+↑** | Speed −0.1x / +0.1x (range 0.1x–20x) |
 | **Backspace** | Reset speed to 1x |
 | **1** | Window size 0.5× video |
 | **2** | Window size 1× video |

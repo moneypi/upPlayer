@@ -32,9 +32,11 @@ target_compile_definitions(upPlayer PRIVATE
 if(MSVC)
   target_compile_options(upPlayer PRIVATE /utf-8 /W4 /permissive-)
   target_link_options(upPlayer PRIVATE "/ENTRY:wWinMainCRTStartup")
+elseif(MINGW)
+  target_link_options(upPlayer PRIVATE -municode)
 endif()
 
-target_link_libraries(upPlayer PRIVATE comctl32 comdlg32 shell32 dwmapi)
+target_link_libraries(upPlayer PRIVATE comctl32 comdlg32 shell32 dwmapi imm32)
 
 set(LIBMPV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/libmpv-win")
 if(EXISTS "${LIBMPV_DIR}/libmpv-2.dll")
