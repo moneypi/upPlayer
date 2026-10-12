@@ -100,7 +100,7 @@ function Install-Nsis {
         foreach ($url in $urls) {
             Write-Host "Downloading NSIS from $url"
             Remove-Item $zip -Force -ErrorAction SilentlyContinue
-            & curl.exe -fL --ssl-no-revoke --noproxy "*" --connect-timeout 30 --retry 3 --retry-all-errors `
+            & curl.exe -fL --ssl-no-revoke --noproxy "*" --connect-timeout 15 --max-time 60 --retry 1 `
                 -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" `
                 -e "https://sourceforge.net/" -o $zip $url
             if ((Test-Path $zip) -and ((Get-Item $zip).Length -gt 1MB)) {
@@ -197,11 +197,15 @@ function Build-SfxSetup {
     Remove-Item $payloadZip -Force -ErrorAction SilentlyContinue
     Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $payloadZip -Force
 
-    $stubCs = Join-Path $PSScriptRoot "SetupStub.cs"
+    $stubCsTemplate = Join-Path $PSScriptRoot "SetupStub.cs"
+    $stubCs = Join-Path $OutDir "SetupStub.versioned.cs"
+    $stubSource = Get-Content $stubCsTemplate -Raw
+    $stubSource = $stubSource -replace 'string version = "1\.0\.0";', "string version = `"$AppVersion`";"
+    Set-Content -Path $stubCs -Value $stubSource -Encoding UTF8
     $stubExe = Join-Path $OutDir "setup-stub.exe"
     Remove-Item $stubExe -Force -ErrorAction SilentlyContinue
 
-    Write-Host "Compiling setup stub with $csc"
+    Write-Host "Compiling setup stub with $csc (AppVersion=$AppVersion)"
     & $csc /nologo /target:winexe /optimize+ /platform:anycpu `
         /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll /r:System.Windows.Forms.dll `
         /out:$stubExe $stubCs

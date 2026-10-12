@@ -14,8 +14,8 @@ if (-not $OutDir) {
 }
 
 $ExeCandidates = @(
-    (Join-Path $Root "build\$Configuration\upPlayer.exe"),
     (Join-Path $Root "out\$Configuration\upPlayer.exe"),
+    (Join-Path $Root "build\$Configuration\upPlayer.exe"),
     (Join-Path $Root "out\upPlayer.exe")
 )
 $Exe = $ExeCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
