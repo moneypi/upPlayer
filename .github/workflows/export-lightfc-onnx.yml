@@ -1,0 +1,127 @@
+﻿name: Export LightFC ONNX
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout LightFC
+        uses: actions/checkout@v4
+        with:
+          repository: LiYunfengLYF/LightFC
+          path: LightFC
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: |
+          python -m pip install -U pip
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install pyyaml easydict onnx onnxsim gdown onnxruntime
+
+      - name: Download official checkpoint
+        run: |
+          gdown "https://drive.google.com/uc?id=1ns7NQJCt078547X483skqjX1qM1rBqLP" -O outputs.zip
+          ls -lh outputs.zip
+          mkdir -p ckpt_extract
+          unzip -q outputs.zip -d ckpt_extract
+          CKPT=$(find ckpt_extract -name 'lightfc_ep*.pth.tar' | head -n1)
+          echo "Found CKPT=$CKPT"
+          test -n "$CKPT"
+          echo "CKPT=$CKPT" >> "$GITHUB_ENV"
+          ls -lh "$CKPT"
+
+      - name: Export ONNX
+        run: |
+          python <<'PY'
+          import os, sys, torch, torch.nn as nn
+          sys.path.insert(0, "LightFC")
+          from lib.models import LightFC
+          from lib.utils.load import load_yaml
+          CKPT = os.environ["CKPT"]
+          cfg = load_yaml(
+              "LightFC/experiments/lightfc/"
+              "mobilnetv2_p_pwcorr_se_scf_sc_iab_sc_adj_concat_repn33_se_conv33_center_wiou.yaml"
+          )
+          net = LightFC(cfg=cfg, env_num=None, training=False)
+          ckpt = torch.load(CKPT, map_location="cpu")
+          net.load_state_dict(ckpt["net"], strict=True)
+          for m in net.modules():
+              if hasattr(m, "switch_to_deploy"):
+                  m.switch_to_deploy()
+          net.eval()
+
+          class Z(nn.Module):
+              def __init__(self, n):
+                  super().__init__()
+                  self.n = n
+              def forward(self, z):
+                  return self.n.forward_backbone(z)
+
+          class X(nn.Module):
+              def __init__(self, n):
+                  super().__init__()
+                  self.n = n
+              def forward(self, z_feat, x):
+                  o = self.n.forward_tracking(z_feat, x)
+                  return o["score_map"], o["size_map"], o["offset_map"]
+
+          z = torch.randn(1, 3, 128, 128)
+          zf = net.forward_backbone(z)
+          print("z_feat shape:", tuple(zf.shape))
+          torch.onnx.export(
+              Z(net), z, "lightfc_z.onnx",
+              input_names=["z"], output_names=["z_feat"],
+              opset_version=17, dynamo=False,
+          )
+          torch.onnx.export(
+              X(net), (zf, torch.randn(1, 3, 256, 256)), "lightfc_x.onnx",
+              input_names=["z_feat", "x"],
+              output_names=["score_map", "size_map", "offset_map"],
+              opset_version=17, dynamo=False,
+          )
+          try:
+              import onnx
+              from onnxsim import simplify
+              for p in ("lightfc_z.onnx", "lightfc_x.onnx"):
+                  model = onnx.load(p)
+                  model_simp, ok = simplify(model)
+                  if ok:
+                      onnx.save(model_simp, p)
+                      print("simplified", p)
+          except Exception as ex:
+              print("onnxsim skipped:", ex)
+          print("export done")
+          PY
+          ls -lh lightfc_z.onnx lightfc_x.onnx
+
+      - name: Print I/O tensor shapes
+        run: |
+          python <<'PY'
+          import os, onnx
+          for path in ("lightfc_z.onnx", "lightfc_x.onnx"):
+              m = onnx.load(path)
+              print("===", path, "size=", os.path.getsize(path), "===")
+              for inp in m.graph.input:
+                  dims = [d.dim_value or d.dim_param for d in inp.type.tensor_type.shape.dim]
+                  print("  in ", inp.name, dims)
+              for out in m.graph.output:
+                  dims = [d.dim_value or d.dim_param for d in out.type.tensor_type.shape.dim]
+                  print("  out", out.name, dims)
+          PY
+
+      - name: Upload to release v0.4.0
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload v0.4.0 lightfc_z.onnx lightfc_x.onnx --repo ${{ github.repository }} --clobber
+          gh release view v0.4.0 --repo ${{ github.repository }} --json assets \
+            --jq '.assets[] | select(.name|startswith("lightfc")) | "\(.name) \(.size) \(.browserDownloadUrl)"'
