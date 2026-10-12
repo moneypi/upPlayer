@@ -169,6 +169,30 @@ if ($whisperSrc) {
     Write-Host "PotPlayer Whisper not found next to build; captions need a local Module\Whisper copy (see README)."
 }
 
+# YOLO26 (optional): onnx next to build + ONNX Runtime DLLs
+$yoloOnnxCandidates = @(
+    (Join-Path (Split-Path $Exe -Parent) "yolo26\yolo26n.onnx"),
+    (Join-Path $Root "third_party\yolo26\yolo26n.onnx")
+)
+$yoloOnnx = $yoloOnnxCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if ($yoloOnnx) {
+    $yoloDest = Join-Path $PkgDir "yolo26"
+    New-Item -ItemType Directory -Force -Path $yoloDest | Out-Null
+    Copy-Item $yoloOnnx (Join-Path $yoloDest "yolo26n.onnx") -Force
+    Write-Host "Including YOLO26 model $yoloOnnx"
+}
+$ortDllCandidates = @(
+    (Join-Path (Split-Path $Exe -Parent) "onnxruntime.dll"),
+    (Join-Path $Root "third_party\onnxruntime\lib\onnxruntime.dll")
+)
+$ortDll = $ortDllCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if ($ortDll) {
+    Copy-Item $ortDll $PkgDir -Force
+    $shared = Join-Path (Split-Path $ortDll -Parent) "onnxruntime_providers_shared.dll"
+    if (Test-Path $shared) { Copy-Item $shared $PkgDir -Force }
+    Write-Host "Including ONNX Runtime from $(Split-Path $ortDll -Parent)"
+}
+
 $fonts = Join-Path $mpvRoot "mpv\fonts.conf"
 if (Test-Path $fonts) {
     New-Item -ItemType Directory -Force -Path (Join-Path $PkgDir "mpv") | Out-Null

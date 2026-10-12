@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.0
+
+- YOLO26 object detection overlay (hotkey **y**): async ONNX Runtime inference; skip busy frames so playback never stalls
+
 ## 0.3.4
 
 - Fix auto captions after install: package local PotPlayer Whisper when present; find CLI/models in more locations

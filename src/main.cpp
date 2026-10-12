@@ -2,6 +2,7 @@
 #include "player.hpp"
 #include "resource.h"
 #include "version.hpp"
+#include "yolo_worker.hpp"
 
 #include <commctrl.h>
 #include <commdlg.h>
@@ -300,6 +301,10 @@ private:
     void toggle_captions();
     void sync_captions_media();
     void refresh_caption_osd(bool force_status);
+    void cycle_yolo_mode();
+    void set_yolo_mode(YoloMode mode);
+    void tick_yolo();
+    void refresh_yolo_osd();
     void note_playback_time(double time_pos);
     void show_about();
 
@@ -310,6 +315,7 @@ private:
     HMENU context_menu_ = nullptr;
     Player player_;
     std::unique_ptr<CaptionWorker> captions_;
+    std::unique_ptr<YoloWorker> yolo_;
     std::wstring shown_title_;
     std::wstring last_caption_osd_;
     std::vector<std::wstring> pending_files_;
@@ -403,6 +409,7 @@ bool App::create(int show, const std::vector<std::wstring>& files) {
     layout();
 
     captions_ = std::make_unique<CaptionWorker>(hwnd_);
+    yolo_ = std::make_unique<YoloWorker>(hwnd_);
 
     if (!player_.start(video_, hwnd_)) {
         MessageBoxW(hwnd_, player_.start_error().c_str(), L"upPlayer", MB_ICONERROR);
@@ -485,6 +492,10 @@ bool App::handle_playback_key(UINT message, WPARAM wparam) {
         case L'a':
         case L'A':
             toggle_captions();
+            return true;
+        case L'y':
+        case L'Y':
+            cycle_yolo_mode();
             return true;
         default:
             return false;
@@ -693,17 +704,21 @@ void App::create_children() {
     AppendMenuW(clip_menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(clip_menu, MF_STRING, ID_CLIP_CLEAR, L"Cancel Clip\tEsc");
 
+    HMENU overlay_menu = CreatePopupMenu();
+    AppendMenuW(overlay_menu, MF_STRING, ID_CAPTIONS_TOGGLE, L"Auto Captions\ta");
+    AppendMenuW(overlay_menu, MF_STRING, ID_YOLO_TOGGLE, L"YOLO26 Detect\ty");
+
     context_menu_ = CreatePopupMenu();
     AppendMenuW(context_menu_, MF_STRING, ID_FILE_OPEN, L"Open...\tCtrl+O");
     AppendMenuW(context_menu_, MF_STRING, ID_FILE_OPEN_URL, L"Open Network Address...\tCtrl+U");
     AppendMenuW(context_menu_, MF_STRING, ID_SNAPSHOT, L"Take Snapshot\ts");
-    AppendMenuW(context_menu_, MF_STRING, ID_CAPTIONS_TOGGLE, L"Auto Captions\ta");
     AppendMenuW(context_menu_, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(context_menu_, MF_POPUP, reinterpret_cast<UINT_PTR>(playback_menu), L"Playback");
     AppendMenuW(context_menu_, MF_POPUP, reinterpret_cast<UINT_PTR>(speed_menu), L"Speed");
     AppendMenuW(context_menu_, MF_POPUP, reinterpret_cast<UINT_PTR>(size_menu), L"Size");
     AppendMenuW(context_menu_, MF_POPUP, reinterpret_cast<UINT_PTR>(volume_menu), L"Volume");
     AppendMenuW(context_menu_, MF_POPUP, reinterpret_cast<UINT_PTR>(clip_menu), L"Clip");
+    AppendMenuW(context_menu_, MF_POPUP, reinterpret_cast<UINT_PTR>(overlay_menu), L"Overlay");
     AppendMenuW(context_menu_, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(context_menu_, MF_STRING, ID_HELP_ABOUT, L"About upPlayer...");
     AppendMenuW(context_menu_, MF_STRING, ID_FILE_EXIT, L"Exit");
@@ -714,6 +729,10 @@ void App::create_children() {
 void App::show_context_menu(int screen_x, int screen_y) {
     if (!context_menu_ || !hwnd_)
         return;
+    CheckMenuItem(context_menu_, ID_CAPTIONS_TOGGLE,
+                  MF_BYCOMMAND | ((captions_ && captions_->enabled()) ? MF_CHECKED : MF_UNCHECKED));
+    CheckMenuItem(context_menu_, ID_YOLO_TOGGLE,
+                  MF_BYCOMMAND | ((yolo_ && yolo_->enabled()) ? MF_CHECKED : MF_UNCHECKED));
     SetForegroundWindow(hwnd_);
     TrackPopupMenu(context_menu_, TPM_RIGHTBUTTON | TPM_LEFTALIGN | TPM_TOPALIGN,
                    screen_x, screen_y, 0, hwnd_, nullptr);
@@ -1253,6 +1272,75 @@ void App::toggle_captions() {
     }
 }
 
+void App::set_yolo_mode(YoloMode mode) {
+    if (!yolo_)
+        return;
+    yolo_->set_mode(mode);
+    if (mode == YoloMode::Off) {
+        player_.clear_yolo_overlay();
+        player_.show_osd("YOLO26 off", 1000);
+    } else {
+        player_.show_osd("YOLO26 on (skip busy frames)", 1400);
+        tick_yolo();
+    }
+}
+
+void App::cycle_yolo_mode() {
+    if (!yolo_)
+        return;
+    set_yolo_mode(yolo_->enabled() ? YoloMode::Off : YoloMode::On);
+}
+
+void App::tick_yolo() {
+    if (!yolo_ || !yolo_->enabled())
+        return;
+    const PlayerState playback = player_.state();
+    if (!playback.has_media || playback.paused)
+        return;
+    // Promote finished JPEGs into the infer queue; never block playback.
+    yolo_->pump();
+    const std::wstring path = yolo_->try_begin_capture();
+    if (path.empty())
+        return;
+    DeleteFileW(path.c_str());
+    player_.screenshot_to_file(path);
+    yolo_->notify_capture_requested(path);
+}
+
+void App::refresh_yolo_osd() {
+    if (!yolo_)
+        return;
+    if (!yolo_->enabled()) {
+        player_.clear_yolo_overlay();
+        return;
+    }
+    // Clear old ASS YOLO text layer; labels/HUD are drawn into the BGRA bitmap.
+    player_.show_yolo_overlay({}, 0, 0);
+
+    const int ow = yolo_->overlay_width();
+    const int oh = yolo_->overlay_height();
+    const std::wstring bgra = yolo_->overlay_bgra_path();
+    if (!bgra.empty() && ow > 0 && oh > 0 && video_) {
+        RECT rc{};
+        GetClientRect(video_, &rc);
+        const int vo_w = (std::max)(1, static_cast<int>(rc.right - rc.left));
+        const int vo_h = (std::max)(1, static_cast<int>(rc.bottom - rc.top));
+        // keepaspect letterbox inside the VO window (matches mpv default).
+        const double scale = (std::min)(static_cast<double>(vo_w) / ow, static_cast<double>(vo_h) / oh);
+        const int dw = (std::max)(1, static_cast<int>(std::lround(ow * scale)));
+        const int dh = (std::max)(1, static_cast<int>(std::lround(oh * scale)));
+        const int ml = (vo_w - dw) / 2;
+        const int mt = (vo_h - dh) / 2;
+        player_.show_yolo_boxes_bgra(bgra, ow, oh, yolo_->overlay_stride(), ml, mt, dw, dh);
+    } else {
+        player_.show_yolo_boxes_bgra({}, 0, 0, 0, 0, 0, 0, 0);
+    }
+
+    const std::wstring status = yolo_->status_text();
+    if (!status.empty())
+        player_.show_osd(WideToUtf8(status), 1600);
+}
+
 void App::sync_captions_media() {
     if (!captions_)
         return;
@@ -1556,12 +1644,18 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
         case ID_CAPTIONS_TOGGLE:
             toggle_captions();
             return 0;
+        case ID_YOLO_TOGGLE:
+            cycle_yolo_mode();
+            return 0;
         default:
             break;
         }
         break;
     case CaptionWorker::WM_CAPTION_UPDATE:
         refresh_caption_osd(true);
+        return 0;
+    case YoloWorker::WM_YOLO_UPDATE:
+        refresh_yolo_osd();
         return 0;
     case WM_DROPFILES: {
         HDROP drop = reinterpret_cast<HDROP>(wparam);
@@ -1625,10 +1719,12 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
                 update_seek_bar();
             note_playback_time(player_.state().time_pos);
             refresh_caption_osd(false);
+            tick_yolo();
         }
         return 0;
     case WM_DESTROY:
         KillTimer(hwnd, kTimerStatus);
+        yolo_.reset();
         captions_.reset();
         player_.shutdown();
         if (context_menu_) {
