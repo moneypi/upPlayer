@@ -27,9 +27,6 @@ std::wstring Quote(const std::wstring& arg) {
 
 std::wstring FindMpv() {
     wchar_t buffer[MAX_PATH];
-    const DWORD length = SearchPathW(nullptr, L"mpv.exe", nullptr, MAX_PATH, buffer, nullptr);
-    if (length > 0 && length < MAX_PATH)
-        return buffer;
     if (GetModuleFileNameW(nullptr, buffer, MAX_PATH) > 0) {
         std::wstring dir(buffer);
         const auto slash = dir.find_last_of(L"\\/");
@@ -39,6 +36,9 @@ std::wstring FindMpv() {
         if (GetFileAttributesW(candidate.c_str()) != INVALID_FILE_ATTRIBUTES)
             return candidate;
     }
+    const DWORD length = SearchPathW(nullptr, L"mpv.exe", nullptr, MAX_PATH, buffer, nullptr);
+    if (length > 0 && length < MAX_PATH)
+        return buffer;
     return {};
 }
 
@@ -390,7 +390,8 @@ void CaptionWorker::thread_main() {
         if (!whisper_.available()) {
             std::lock_guard<std::mutex> lock(mu_);
             status_ = CaptionStatus::Error;
-            status_text_ = L"PotPlayer Whisper missing (third_party/potplayer-whisper)";
+            status_text_ =
+                L"Whisper CLI not found — copy PotPlayer Module\\Whisper to potplayer-whisper next to upPlayer";
             if (notify_)
                 PostMessageW(notify_, WM_CAPTION_UPDATE, 0, 0);
             continue;

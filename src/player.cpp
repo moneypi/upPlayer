@@ -551,11 +551,12 @@ void Player::fail_libmpv() {
 }
 
 bool Player::start_exe(HWND video, std::wstring& error) {
-    std::wstring mpv = FindOnPath(L"mpv.exe");
-    if (mpv.empty())
-        mpv = ExeDirectory() + L"\\mpv.exe";
-    if (GetFileAttributesW(mpv.c_str()) == INVALID_FILE_ATTRIBUTES) {
-        error = L"PATH 中没有 mpv.exe。";
+    // Prefer the mpv next to upPlayer.exe (installer bundle) over a random PATH hit.
+    std::wstring mpv = ExeDirectory() + L"\\mpv.exe";
+    if (GetFileAttributesW(mpv.c_str()) == INVALID_FILE_ATTRIBUTES)
+        mpv = FindOnPath(L"mpv.exe");
+    if (mpv.empty() || GetFileAttributesW(mpv.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        error = L"找不到 mpv.exe（应与 upPlayer.exe 同目录，或在 PATH 中）。";
         return false;
     }
 
@@ -658,14 +659,24 @@ void Player::fail_exe() {
 }
 
 bool Player::connect_pipe() {
-    for (int attempt = 0; attempt < 50; ++attempt) {
+    // Cold start from Program Files can take a few seconds while DLLs load.
+    for (int attempt = 0; attempt < 100; ++attempt) {
         if (process_ && WaitForSingleObject(process_, 0) == WAIT_OBJECT_0)
             return false;
-        HANDLE pipe = CreateFileW(pipe_name_.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
-                                  OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
-        if (pipe != INVALID_HANDLE_VALUE) {
-            pipe_ = pipe;
-            return true;
+        if (WaitNamedPipeW(pipe_name_.c_str(), 100)) {
+            HANDLE pipe = CreateFileW(pipe_name_.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+                                      OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
+            if (pipe != INVALID_HANDLE_VALUE) {
+                pipe_ = pipe;
+                return true;
+            }
+        } else {
+            HANDLE pipe = CreateFileW(pipe_name_.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+                                      OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
+            if (pipe != INVALID_HANDLE_VALUE) {
+                pipe_ = pipe;
+                return true;
+            }
         }
         // mpv sends window messages while attaching to --wid. Pump them or both sides wait forever.
         MsgWaitForMultipleObjects(0, nullptr, FALSE, 100, QS_ALLINPUT);

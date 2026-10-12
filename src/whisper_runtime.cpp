@@ -42,14 +42,66 @@ std::wstring Quote(const std::wstring& arg) {
     return out;
 }
 
+void AppendWhisperCliCandidates(std::vector<std::wstring>& out, const std::wstring& root) {
+    if (root.empty())
+        return;
+    out.push_back(root + L"\\Vulkan\\main64.exe");
+    out.push_back(root + L"\\CPU\\main64.exe");
+    out.push_back(root + L"\\main64.exe");
+}
+
+std::wstring PotPlayerInstallRoot() {
+    const wchar_t* keys[] = {
+        L"SOFTWARE\\DAUM\\PotPlayer64",
+        L"SOFTWARE\\DAUM\\PotPlayerMini64",
+        L"SOFTWARE\\WOW6432Node\\DAUM\\PotPlayer64",
+        L"SOFTWARE\\WOW6432Node\\DAUM\\PotPlayerMini64",
+    };
+    for (const wchar_t* key : keys) {
+        HKEY hkey = nullptr;
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, key, 0, KEY_READ, &hkey) != ERROR_SUCCESS)
+            continue;
+        wchar_t path[MAX_PATH] = {};
+        DWORD type = 0;
+        DWORD size = sizeof(path);
+        const LONG ok = RegQueryValueExW(hkey, L"ProgramPath", nullptr, &type,
+                                         reinterpret_cast<LPBYTE>(path), &size);
+        RegCloseKey(hkey);
+        if (ok == ERROR_SUCCESS && (type == REG_SZ || type == REG_EXPAND_SZ) && path[0]) {
+            std::wstring dir(path);
+            const auto slash = dir.find_last_of(L"\\/");
+            if (slash != std::wstring::npos)
+                dir.resize(slash);
+            if (FileExists(dir + L"\\PotPlayerMini64.exe") || FileExists(dir + L"\\PotPlayer64.exe") ||
+                FileExists(dir + L"\\Module\\Whisper"))
+                return dir;
+        }
+    }
+    const std::wstring fallbacks[] = {
+        std::wstring(L"C:\\Program Files\\DAUM\\PotPlayer"),
+        std::wstring(L"C:\\Program Files (x86)\\DAUM\\PotPlayer"),
+    };
+    for (const std::wstring& dir : fallbacks) {
+        if (FileExists(dir + L"\\Module\\Whisper"))
+            return dir;
+    }
+    return {};
+}
+
 std::wstring FindCli() {
     const std::wstring root = ExeDirectory();
-    const std::wstring candidates[] = {
-        root + L"\\potplayer-whisper\\Vulkan\\main64.exe",
-        root + L"\\..\\..\\third_party\\potplayer-whisper\\Vulkan\\main64.exe",
-        root + L"\\potplayer-whisper\\CPU\\main64.exe",
-        root + L"\\..\\..\\third_party\\potplayer-whisper\\CPU\\main64.exe",
-    };
+    std::vector<std::wstring> candidates;
+    AppendWhisperCliCandidates(candidates, root + L"\\potplayer-whisper");
+    AppendWhisperCliCandidates(candidates, root + L"\\..\\..\\third_party\\potplayer-whisper");
+
+    wchar_t local[MAX_PATH];
+    if (GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH) > 0)
+        AppendWhisperCliCandidates(candidates, std::wstring(local) + L"\\upPlayer\\potplayer-whisper");
+
+    const std::wstring pot = PotPlayerInstallRoot();
+    if (!pot.empty())
+        AppendWhisperCliCandidates(candidates, pot + L"\\Module\\Whisper");
+
     for (const std::wstring& c : candidates) {
         const std::wstring full = Resolve(c);
         if (!full.empty())
@@ -58,27 +110,45 @@ std::wstring FindCli() {
     return {};
 }
 
-std::wstring FindModel() {
-    wchar_t appdata[MAX_PATH];
-    if (GetEnvironmentVariableW(L"APPDATA", appdata, MAX_PATH) > 0) {
-        const std::wstring pot = std::wstring(appdata) + L"\\PotPlayerMini64\\Model\\ggml-base.bin";
-        if (FileExists(pot))
-            return pot;
-        // Prefer larger model if user only has that installed in PotPlayer.
-        const std::wstring large = std::wstring(appdata) + L"\\PotPlayerMini64\\Model\\ggml-large-v3.bin";
-        if (FileExists(large))
-            return large;
-        const std::wstring tiny = std::wstring(appdata) + L"\\PotPlayerMini64\\Model\\ggml-tiny.bin";
-        if (FileExists(tiny))
-            return tiny;
-    }
-    wchar_t local[MAX_PATH];
-    if (GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH) > 0) {
-        const std::wstring up = std::wstring(local) + L"\\upPlayer\\models\\ggml-base.bin";
-        if (FileExists(up))
-            return up;
+std::wstring FirstExistingModel(const std::vector<std::wstring>& dirs) {
+    const wchar_t* names[] = {
+        L"ggml-base.bin",
+        L"ggml-small.bin",
+        L"ggml-medium.bin",
+        L"ggml-large-v3.bin",
+        L"ggml-tiny.bin",
+    };
+    for (const std::wstring& dir : dirs) {
+        if (dir.empty())
+            continue;
+        for (const wchar_t* name : names) {
+            const std::wstring path = dir + L"\\" + name;
+            if (FileExists(path))
+                return path;
+        }
     }
     return {};
+}
+
+std::wstring FindModel() {
+    std::vector<std::wstring> dirs;
+    const std::wstring root = ExeDirectory();
+    dirs.push_back(root + L"\\models");
+    dirs.push_back(root + L"\\potplayer-whisper\\Model");
+
+    wchar_t appdata[MAX_PATH];
+    if (GetEnvironmentVariableW(L"APPDATA", appdata, MAX_PATH) > 0)
+        dirs.push_back(std::wstring(appdata) + L"\\PotPlayerMini64\\Model");
+
+    wchar_t local[MAX_PATH];
+    if (GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH) > 0)
+        dirs.push_back(std::wstring(local) + L"\\upPlayer\\models");
+
+    const std::wstring pot = PotPlayerInstallRoot();
+    if (!pot.empty())
+        dirs.push_back(pot + L"\\Model");
+
+    return FirstExistingModel(dirs);
 }
 
 double ParseTimestamp(const std::string& value) {
@@ -280,7 +350,7 @@ std::wstring WhisperRuntime::backend_label() const {
         return L"PotPlayer Whisper (Vulkan)";
     if (cli.find(L"\\CPU\\") != std::wstring::npos)
         return L"PotPlayer Whisper (CPU)";
-    return cli.empty() ? L"missing" : L"PotPlayer Whisper";
+    return cli.empty() ? L"Whisper CLI not found" : L"PotPlayer Whisper";
 }
 
 bool WhisperRuntime::ensure_model(const ProgressFn& progress) {

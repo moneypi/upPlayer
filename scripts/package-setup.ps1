@@ -186,32 +186,41 @@ function Build-SfxSetup {
         throw "csc.exe not found. Install NSIS, or keep the .NET Framework 4 csc toolchain."
     }
 
-    $stage = Join-Path $OutDir "setup-stage"
-    Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
-    New-Item -ItemType Directory -Force -Path $stage | Out-Null
-
-    Copy-Item (Join-Path $PkgDir '*') $stage -Recurse -Force
-    Copy-Item (Join-Path $PSScriptRoot 'install-payload.ps1') $stage -Force
-
-    $payloadZip = Join-Path $OutDir "setup-payload.zip"
-    Remove-Item $payloadZip -Force -ErrorAction SilentlyContinue
-    Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $payloadZip -Force
-
     $stubCsTemplate = Join-Path $PSScriptRoot "SetupStub.cs"
     $stubCs = Join-Path $OutDir "SetupStub.versioned.cs"
     $stubSource = Get-Content $stubCsTemplate -Raw
+    # Inject version default used by the WinForms installer title.
     $stubSource = $stubSource -replace 'string version = "1\.0\.0";', "string version = `"$AppVersion`";"
     Set-Content -Path $stubCs -Value $stubSource -Encoding UTF8
     $stubExe = Join-Path $OutDir "setup-stub.exe"
     Remove-Item $stubExe -Force -ErrorAction SilentlyContinue
 
+    $icon = Join-Path $Root "src\upplayer.ico"
+    if (-not (Test-Path $icon)) {
+        throw "Missing setup icon: $icon"
+    }
+
     Write-Host "Compiling setup stub with $csc (AppVersion=$AppVersion)"
     & $csc /nologo /target:winexe /optimize+ /platform:anycpu `
-        /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll /r:System.Windows.Forms.dll `
+        /win32icon:$icon `
+        /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll `
+        /r:System.Windows.Forms.dll /r:System.Drawing.dll `
         /out:$stubExe $stubCs
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $stubExe)) {
         throw "Failed to compile setup stub."
     }
+
+    $stage = Join-Path $OutDir "setup-stage"
+    Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path $stage | Out-Null
+
+    Copy-Item (Join-Path $PkgDir '*') $stage -Recurse -Force
+    # Stub-only binary doubles as Uninstall.exe inside the payload (no PowerShell).
+    Copy-Item $stubExe (Join-Path $stage 'Uninstall.exe') -Force
+
+    $payloadZip = Join-Path $OutDir "setup-payload.zip"
+    Remove-Item $payloadZip -Force -ErrorAction SilentlyContinue
+    Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $payloadZip -Force
 
     Write-Host "Packing self-extracting setup..."
     Remove-Item $SetupOut -Force -ErrorAction SilentlyContinue
@@ -229,7 +238,7 @@ function Build-SfxSetup {
     [Buffer]::BlockCopy($trailer, 0, $out, $stubBytes.Length + $zipBytes.Length, 16)
     [IO.File]::WriteAllBytes($SetupOut, $out)
 
-    Remove-Item $stubExe, $payloadZip -Force -ErrorAction SilentlyContinue
+    Remove-Item $stubExe, $payloadZip, $stubCs -Force -ErrorAction SilentlyContinue
     Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
     return $true
 }

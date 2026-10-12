@@ -39,10 +39,29 @@ $shortcut.WorkingDirectory = $InstallRoot
 $shortcut.IconLocation = "$exe,0"
 $shortcut.Save()
 
+# PotPlayer-style Open with / Default Apps registration
+$register = Join-Path $InstallRoot 'register-assoc.ps1'
+if (-not (Test-Path $register)) {
+    $register = Join-Path $Source 'register-assoc.ps1'
+}
+if (Test-Path $register) {
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $register -Action Register -ExePath $exe -AppName $AppName
+    if ($LASTEXITCODE -ne 0) {
+        throw "File association registration failed ($LASTEXITCODE)."
+    }
+} else {
+    Write-Warning "register-assoc.ps1 missing; Open with will not be registered."
+}
+
 $uninstallPs1 = Join-Path $InstallRoot "uninstall.ps1"
 @"
 `$ErrorActionPreference = 'Stop'
 `$root = Split-Path -Parent `$MyInvocation.MyCommand.Path
+`$exe = Join-Path `$root 'upPlayer.exe'
+`$reg = Join-Path `$root 'register-assoc.ps1'
+if (Test-Path `$reg) {
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `$reg -Action Unregister -ExePath `$exe -AppName 'upPlayer'
+}
 Remove-Item (Join-Path ([Environment]::GetFolderPath('CommonPrograms')) '$AppName') -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$AppName' -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item `$root -Recurse -Force
@@ -56,7 +75,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0uninstall.ps1"
 
 $regPath = "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$AppName"
 New-Item -Path $regPath -Force | Out-Null
-New-ItemProperty -Path $regPath -Name "DisplayName" -Value $AppName -PropertyType String -Force | Out-Null
+New-ItemProperty -Path $regPath -Name "DisplayName" -Value "$AppName $AppVersion" -PropertyType String -Force | Out-Null
 New-ItemProperty -Path $regPath -Name "DisplayVersion" -Value $AppVersion -PropertyType String -Force | Out-Null
 New-ItemProperty -Path $regPath -Name "Publisher" -Value $AppName -PropertyType String -Force | Out-Null
 New-ItemProperty -Path $regPath -Name "InstallLocation" -Value $InstallRoot -PropertyType String -Force | Out-Null

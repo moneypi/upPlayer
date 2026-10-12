@@ -94,11 +94,21 @@ Section "Install" SecInstall
   IntFmt $0 "0x%08X" $0
   WriteRegDWORD HKLM "${UNINST_KEY}" "EstimatedSize" "$0"
 
+  ; PotPlayer-style Open with / Default Apps (via register-assoc.ps1 in package)
+  IfFileExists "$INSTDIR\register-assoc.ps1" 0 skip_assoc_reg
+    ExecWait 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\register-assoc.ps1" -Action Register -ExePath "$INSTDIR\${APP_EXE}" -AppName "${APP_NAME}"'
+  skip_assoc_reg:
+
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 SectionEnd
 
 Section "Uninstall"
   SetRegView 64
+
+  IfFileExists "$INSTDIR\register-assoc.ps1" 0 skip_assoc_unreg
+    ExecWait 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\register-assoc.ps1" -Action Unregister -ExePath "$INSTDIR\${APP_EXE}" -AppName "${APP_NAME}"'
+  skip_assoc_unreg:
+
   Delete "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk"
   Delete "$SMPROGRAMS\${APP_NAME}\Uninstall.lnk"
   RMDir "$SMPROGRAMS\${APP_NAME}"

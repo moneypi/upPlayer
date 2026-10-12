@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.4
+
+- Fix auto captions after install: package local PotPlayer Whisper when present; find CLI/models in more locations
+- Clearer caption status when Whisper CLI is absent (no bare “missing”)
+
+## 0.3.3
+
+- Fix post-install Start: launch unelevated (avoids mpv IPC failure from elevated setup)
+- Prefer bundled `mpv.exe` next to upPlayer; longer IPC connect wait
+
+## 0.3.2
+
+- Setup UI: choose install folder, install progress page, then Finish / Start (no PowerShell)
+
+## 0.3.1
+
+- Register upPlayer for Windows **Open with** and Default Apps (PotPlayer/VLC-style), including uninstall cleanup
+
 ## 0.3.0
 
 - Live auto captions via local PotPlayer Whisper module (Vulkan, CPU fallback); hotkey **a**

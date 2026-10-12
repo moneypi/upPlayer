@@ -2,7 +2,7 @@
 
 Lightweight Windows video player front-end for [mpv](https://mpv.io/). Opens local files and network URLs, embeds playback in a Win32 window, and includes a simple seek bar.
 
-**Version:** 0.3.0 (right-click → **About upPlayer…**) — see [CHANGELOG](CHANGELOG.md)
+**Version:** 0.3.4 (right-click → **About upPlayer…**) — see [CHANGELOG](CHANGELOG.md)
 
 **License:** upPlayer source is [MIT](LICENSE). Third-party components (mpv, PotPlayer Whisper binaries, models) have their own terms — see [NOTICE](NOTICE).
 
@@ -38,7 +38,7 @@ Build a Windows setup installer with **NSIS** (same Nullsoft installer family as
 .\scripts\package-setup.ps1
 ```
 
-Output: `build\dist\upPlayer-Setup-x64-<version>.exe` (version from `src/version.hpp`; same files as the zip: `upPlayer.exe` + bundled mpv). Installs machine-wide to `C:\Program Files\upPlayer` (admin / UAC). Script: `scripts\upPlayer.nsi`.
+Output: `build\dist\upPlayer-Setup-x64-<version>.exe` (version from `src/version.hpp`; same files as the zip: `upPlayer.exe` + bundled mpv). The setup UI lets you choose the install folder and whether to launch upPlayer afterward (admin / UAC). NSIS script: `scripts\upPlayer.nsi` (when available); otherwise the WinForms SFX stub.
 
 Publish a GitHub release (tag + setup asset):
 

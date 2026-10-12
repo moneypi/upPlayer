@@ -145,8 +145,29 @@ foreach ($doc in @("LICENSE", "NOTICE", "CHANGELOG.md", "README.md")) {
     }
 }
 
-# Do not bundle PotPlayer Whisper binaries in public releases (proprietary).
-# Users copy Module\Whisper locally; see NOTICE / README.
+foreach ($script in @("register-assoc.ps1", "install-payload.ps1")) {
+    $src = Join-Path $PSScriptRoot $script
+    if (Test-Path $src) {
+        Copy-Item $src $PkgDir -Force
+    }
+}
+
+# PotPlayer Whisper is proprietary — only include a local copy if the developer
+# already placed it next to the built exe or under third_party (gitignored).
+# Do not publish those binaries unless you have redistrib rights; see NOTICE.
+$whisperCandidates = @(
+    (Join-Path (Split-Path $Exe -Parent) "potplayer-whisper"),
+    (Join-Path $Root "third_party\potplayer-whisper")
+)
+$whisperSrc = $whisperCandidates | Where-Object {
+    (Test-Path (Join-Path $_ "Vulkan\main64.exe")) -or (Test-Path (Join-Path $_ "CPU\main64.exe"))
+} | Select-Object -First 1
+if ($whisperSrc) {
+    Write-Host "Including local PotPlayer Whisper from $whisperSrc"
+    Copy-Item $whisperSrc (Join-Path $PkgDir "potplayer-whisper") -Recurse -Force
+} else {
+    Write-Host "PotPlayer Whisper not found next to build; captions need a local Module\Whisper copy (see README)."
+}
 
 $fonts = Join-Path $mpvRoot "mpv\fonts.conf"
 if (Test-Path $fonts) {
