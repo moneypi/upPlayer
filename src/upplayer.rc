@@ -1,8 +1,38 @@
 #include <winres.h>
 #pragma code_page(65001)
 #include "resource.h"
+#include "version.hpp"
 
 IDI_APP ICON "upplayer.ico"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION UPPLAYER_VERSION_MAJOR,UPPLAYER_VERSION_MINOR,UPPLAYER_VERSION_PATCH,0
+PRODUCTVERSION UPPLAYER_VERSION_MAJOR,UPPLAYER_VERSION_MINOR,UPPLAYER_VERSION_PATCH,0
+FILEFLAGSMASK 0x3fL
+FILEFLAGS 0x0L
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "upPlayer"
+            VALUE "FileDescription", "upPlayer"
+            VALUE "FileVersion", UPPLAYER_VERSION_STRING
+            VALUE "InternalName", "upPlayer"
+            VALUE "LegalCopyright", "Copyright (c) 2026 Felix"
+            VALUE "OriginalFilename", "upPlayer.exe"
+            VALUE "ProductName", "upPlayer"
+            VALUE "ProductVersion", UPPLAYER_VERSION_STRING
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
 
 IDD_URL DIALOGEX 0, 0, 380, 72
 STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
@@ -56,6 +86,8 @@ BEGIN
     "X", ID_CLIP_MARK_OUT
     "c", ID_CLIP_EXPORT
     "C", ID_CLIP_EXPORT
+    "a", ID_CAPTIONS_TOGGLE
+    "A", ID_CAPTIONS_TOGGLE
     ",", ID_FRAME_BACK
     ".", ID_FRAME_FORWARD
     VK_OEM_COMMA, ID_FRAME_BACK, VIRTKEY

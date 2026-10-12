@@ -27,8 +27,8 @@ RequestExecutionLevel admin
 SetCompressor /SOLID lzma
 SetCompressorDictSize 64
 
-Name "${APP_NAME}"
-OutFile "${OUT_DIR}\upPlayer-Setup-x64.exe"
+Name "${APP_NAME} ${APP_VERSION}"
+OutFile "${OUT_DIR}\upPlayer-Setup-x64-${APP_VERSION}.exe"
 InstallDir "$PROGRAMFILES64\${APP_NAME}"
 InstallDirRegKey HKLM "Software\${APP_NAME}" "InstallLocation"
 ShowInstDetails show
@@ -80,7 +80,7 @@ Section "Install" SecInstall
   CreateShortCut "$SMPROGRAMS\${APP_NAME}\Uninstall.lnk" "$INSTDIR\Uninstall.exe"
 
   WriteRegStr HKLM "Software\${APP_NAME}" "InstallLocation" "$INSTDIR"
-  WriteRegStr HKLM "${UNINST_KEY}" "DisplayName" "${APP_NAME}"
+  WriteRegStr HKLM "${UNINST_KEY}" "DisplayName" "${APP_NAME} ${APP_VERSION}"
   WriteRegStr HKLM "${UNINST_KEY}" "DisplayVersion" "${APP_VERSION}"
   WriteRegStr HKLM "${UNINST_KEY}" "Publisher" "${APP_PUBLISHER}"
   WriteRegStr HKLM "${UNINST_KEY}" "URLInfoAbout" "${APP_URL}"

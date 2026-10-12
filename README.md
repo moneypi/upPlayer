@@ -2,6 +2,10 @@
 
 Lightweight Windows video player front-end for [mpv](https://mpv.io/). Opens local files and network URLs, embeds playback in a Win32 window, and includes a simple seek bar.
 
+**Version:** 0.3.0 (right-click → **About upPlayer…**) — see [CHANGELOG](CHANGELOG.md)
+
+**License:** upPlayer source is [MIT](LICENSE). Third-party components (mpv, PotPlayer Whisper binaries, models) have their own terms — see [NOTICE](NOTICE).
+
 ## Requirements
 
 - Windows 10+
@@ -34,7 +38,14 @@ Build a Windows setup installer with **NSIS** (same Nullsoft installer family as
 .\scripts\package-setup.ps1
 ```
 
-Output: `build\dist\upPlayer-Setup-x64.exe` (same files as the zip: `upPlayer.exe` + bundled mpv). Installs machine-wide to `C:\Program Files\upPlayer` (admin / UAC). Script: `scripts\upPlayer.nsi`.
+Output: `build\dist\upPlayer-Setup-x64-<version>.exe` (version from `src/version.hpp`; same files as the zip: `upPlayer.exe` + bundled mpv). Installs machine-wide to `C:\Program Files\upPlayer` (admin / UAC). Script: `scripts\upPlayer.nsi`.
+
+Publish a GitHub release (tag + setup asset):
+
+```powershell
+.\scripts\package-setup.ps1
+.\scripts\publish-release.ps1
+```
 
 ## Run
 
@@ -68,6 +79,7 @@ Output: `build\dist\upPlayer-Setup-x64.exe` (same files as the zip: `upPlayer.ex
 | **m** | Mute / unmute |
 | **Mouse wheel** | Volume up / down (over video or seek bar) |
 | **s** | Take snapshot (saved to Desktop) |
+| **a** | Toggle live auto captions (PotPlayer Whisper Vulkan/CPU) |
 | **z** | Mark clip In (A); pauses; selects In for `,` / `.` nudge |
 | **x** | Mark clip Out (B); pauses; selects Out for `,` / `.` nudge |
 | **,** / **.** | Nudge selected mark ±1 frame (or frame-step if none selected) |
@@ -81,5 +93,16 @@ Numpad **1–6** work the same as the top-row digits. Keyboard volume keys also 
 Bottom bar: seek slider on the left, volume slider on the right (drag to set 0–100; muted shows empty). Clip In (green) / Out (orange) marks can be dragged on the seek bar; `,` / `.` nudge the selected mark by one frame (right-click → **Clip** to clear).
 
 Clip export runs a separate `mpv.exe` with `--stream-record` (same binary used for playback; release zip bundles it). Output is a remux dump, so In may snap to a nearby keyframe.
+
+### Auto captions
+
+Press **a** to toggle live captions. For local use, copy PotPlayer’s Whisper module into `third_party/potplayer-whisper` (Vulkan `main64.exe`, CPU fallback). Those binaries are **not** MIT-licensed and are **not** shipped in this repo — see [NOTICE](NOTICE). Models are shared with PotPlayer (`%APPDATA%\PotPlayerMini64\Model\`) or `%LOCALAPPDATA%\upPlayer\models\ggml-base.bin`.
+
+```powershell
+Copy-Item "C:\Program Files\DAUM\PotPlayer\Module\Whisper\*" `
+  "third_party\potplayer-whisper\" -Recurse -Force
+```
+
+Requires `mpv.exe` on `PATH` (or next to `upPlayer.exe`) to extract audio chunks.
 
 When speed is not 1x, the window title shows the current rate (for example `[1.5x]`), and a short on-screen label appears after changing speed.

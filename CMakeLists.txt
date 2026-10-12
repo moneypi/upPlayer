@@ -13,6 +13,8 @@ endif()
 add_executable(upPlayer WIN32
   src/main.cpp
   src/player.cpp
+  src/caption_worker.cpp
+  src/whisper_runtime.cpp
   src/upplayer.rc
 )
 
@@ -47,4 +49,13 @@ if(EXISTS "${LIBMPV_DIR}/libmpv-2.dll")
               "${dll}" "$<TARGET_FILE_DIR:upPlayer>"
       VERBATIM)
   endforeach()
+endif()
+
+set(POTPLAYER_WHISPER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/potplayer-whisper")
+if(EXISTS "${POTPLAYER_WHISPER_DIR}/Vulkan/main64.exe")
+  add_custom_command(TARGET upPlayer POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${POTPLAYER_WHISPER_DIR}"
+            "$<TARGET_FILE_DIR:upPlayer>/potplayer-whisper"
+    VERBATIM)
 endif()

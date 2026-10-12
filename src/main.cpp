@@ -1,5 +1,7 @@
+#include "caption_worker.hpp"
 #include "player.hpp"
 #include "resource.h"
+#include "version.hpp"
 
 #include <commctrl.h>
 #include <commdlg.h>
@@ -11,6 +13,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -58,6 +61,19 @@ std::wstring QuoteCmd(const std::wstring& arg) {
             out.push_back(c);
     }
     out += L'"';
+    return out;
+}
+
+std::string WideToUtf8(const std::wstring& text) {
+    if (text.empty())
+        return {};
+    const int needed = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()),
+                                           nullptr, 0, nullptr, nullptr);
+    if (needed <= 0)
+        return {};
+    std::string out(static_cast<size_t>(needed), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), out.data(), needed,
+                        nullptr, nullptr);
     return out;
 }
 
@@ -281,6 +297,11 @@ private:
     double time_from_seek_x(int x) const;
     int dpi() const;
     int seek_bar_height() const;
+    void toggle_captions();
+    void sync_captions_media();
+    void refresh_caption_osd(bool force_status);
+    void note_playback_time(double time_pos);
+    void show_about();
 
     HINSTANCE instance_ = nullptr;
     HWND hwnd_ = nullptr;
@@ -288,7 +309,9 @@ private:
     HWND seek_bar_ = nullptr;
     HMENU context_menu_ = nullptr;
     Player player_;
+    std::unique_ptr<CaptionWorker> captions_;
     std::wstring shown_title_;
+    std::wstring last_caption_osd_;
     std::vector<std::wstring> pending_files_;
     bool seeking_ = false;
     bool volume_dragging_ = false;
@@ -296,6 +319,8 @@ private:
     double volume_preview_ = -1.0;
     double clip_in_ = -1.0;
     double clip_out_ = -1.0;
+    double last_caption_time_ = -1.0;
+    ULONGLONG last_caption_osd_tick_ = 0;
     ClipMark clip_active_ = ClipMark::None;
     ClipMark clip_dragging_ = ClipMark::None;
     bool fullscreen_ = false;
@@ -377,6 +402,8 @@ bool App::create(int show, const std::vector<std::wstring>& files) {
     UpdateWindow(hwnd_);
     layout();
 
+    captions_ = std::make_unique<CaptionWorker>(hwnd_);
+
     if (!player_.start(video_, hwnd_)) {
         MessageBoxW(hwnd_, player_.start_error().c_str(), L"upPlayer", MB_ICONERROR);
     } else if (!pending_files_.empty()) {
@@ -454,6 +481,10 @@ bool App::handle_playback_key(UINT message, WPARAM wparam) {
         case L's':
         case L'S':
             player_.take_snapshot();
+            return true;
+        case L'a':
+        case L'A':
+            toggle_captions();
             return true;
         default:
             return false;
@@ -666,6 +697,7 @@ void App::create_children() {
     AppendMenuW(context_menu_, MF_STRING, ID_FILE_OPEN, L"Open...\tCtrl+O");
     AppendMenuW(context_menu_, MF_STRING, ID_FILE_OPEN_URL, L"Open Network Address...\tCtrl+U");
     AppendMenuW(context_menu_, MF_STRING, ID_SNAPSHOT, L"Take Snapshot\ts");
+    AppendMenuW(context_menu_, MF_STRING, ID_CAPTIONS_TOGGLE, L"Auto Captions\ta");
     AppendMenuW(context_menu_, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(context_menu_, MF_POPUP, reinterpret_cast<UINT_PTR>(playback_menu), L"Playback");
     AppendMenuW(context_menu_, MF_POPUP, reinterpret_cast<UINT_PTR>(speed_menu), L"Speed");
@@ -673,6 +705,7 @@ void App::create_children() {
     AppendMenuW(context_menu_, MF_POPUP, reinterpret_cast<UINT_PTR>(volume_menu), L"Volume");
     AppendMenuW(context_menu_, MF_POPUP, reinterpret_cast<UINT_PTR>(clip_menu), L"Clip");
     AppendMenuW(context_menu_, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(context_menu_, MF_STRING, ID_HELP_ABOUT, L"About upPlayer...");
     AppendMenuW(context_menu_, MF_STRING, ID_FILE_EXIT, L"Exit");
 
     DragAcceptFiles(hwnd_, TRUE);
@@ -946,6 +979,9 @@ void App::seek_from_point(int x) {
     clip_active_ = ClipMark::None;
     seek_preview_ = time;
     player_.seek_absolute(seek_preview_);
+    last_caption_time_ = time;
+    if (captions_ && captions_->enabled())
+        captions_->on_seek(time);
     update_seek_bar();
 }
 
@@ -1182,9 +1218,88 @@ void App::open_target(const std::wstring& target) {
     clip_out_ = -1.0;
     clip_active_ = ClipMark::None;
     clip_dragging_ = ClipMark::None;
+    last_caption_time_ = -1.0;
+    last_caption_osd_.clear();
+    player_.clear_caption();
     if (!player_.load(target))
         update_title();
+    sync_captions_media();
     update_seek_bar();
+}
+
+void App::show_about() {
+    std::wstring text = L"upPlayer ";
+    text += UPPLAYER_VERSION_STRINGW;
+    text += L"\n\nLightweight Win32 front-end for mpv.";
+    text += L"\nPlayback: ";
+    text += player_.backend_label().empty() ? L"n/a" : player_.backend_label();
+    text += L"\n\nLicense: MIT (see LICENSE / NOTICE)";
+    MessageBoxW(hwnd_, text.c_str(), L"About upPlayer", MB_OK | MB_ICONINFORMATION);
+}
+
+void App::toggle_captions() {
+    if (!captions_)
+        return;
+    const bool on = !captions_->enabled();
+    captions_->set_enabled(on);
+    if (on) {
+        sync_captions_media();
+        player_.show_osd("Captions on", 1000);
+    } else {
+        last_caption_osd_.clear();
+        last_caption_osd_tick_ = 0;
+        player_.clear_caption();
+        player_.show_osd("Captions off", 1000);
+    }
+}
+
+void App::sync_captions_media() {
+    if (!captions_)
+        return;
+    const PlayerState playback = player_.state();
+    const std::wstring path = player_.current_path();
+    captions_->set_media(path, playback.duration);
+    if (playback.time_pos >= 0.0)
+        captions_->on_seek(playback.time_pos);
+}
+
+void App::note_playback_time(double time_pos) {
+    if (!captions_ || !captions_->enabled() || !(time_pos >= 0.0))
+        return;
+    if (last_caption_time_ >= 0.0 && std::fabs(time_pos - last_caption_time_) > 1.5)
+        captions_->on_seek(time_pos);
+    last_caption_time_ = time_pos;
+    captions_->tick(time_pos);
+}
+
+void App::refresh_caption_osd(bool force_status) {
+    if (!captions_ || !captions_->enabled())
+        return;
+    const PlayerState playback = player_.state();
+    if (!(playback.time_pos >= 0.0))
+        return;
+    const ULONGLONG now = GetTickCount64();
+    const std::wstring cue = captions_->active_text(playback.time_pos);
+    if (!cue.empty()) {
+        if (cue != last_caption_osd_) {
+            last_caption_osd_ = cue;
+            last_caption_osd_tick_ = now;
+            player_.show_caption(WideToUtf8(cue));
+        }
+        return;
+    }
+    // No active cue: clear bottom caption so stale lines don't linger.
+    if (!last_caption_osd_.empty()) {
+        last_caption_osd_.clear();
+        player_.clear_caption();
+    }
+    if (!force_status)
+        return;
+    const std::wstring status = captions_->status_text();
+    if (!status.empty() && now - last_caption_osd_tick_ > 1500) {
+        last_caption_osd_tick_ = now;
+        player_.show_osd(WideToUtf8(status), 1500);
+    }
 }
 
 bool App::clip_session_active() const {
@@ -1350,6 +1465,9 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
         case ID_FILE_EXIT:
             DestroyWindow(hwnd);
             return 0;
+        case ID_HELP_ABOUT:
+            show_about();
+            return 0;
         case ID_PLAY_PAUSE:
             player_.toggle_pause();
             return 0;
@@ -1435,10 +1553,16 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
         case ID_CLIP_EXPORT:
             export_clip();
             return 0;
+        case ID_CAPTIONS_TOGGLE:
+            toggle_captions();
+            return 0;
         default:
             break;
         }
         break;
+    case CaptionWorker::WM_CAPTION_UPDATE:
+        refresh_caption_osd(true);
+        return 0;
     case WM_DROPFILES: {
         HDROP drop = reinterpret_cast<HDROP>(wparam);
         const UINT count = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
@@ -1479,11 +1603,15 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
         player_.poll();
         update_title();
         update_seek_bar();
+        note_playback_time(player_.state().time_pos);
+        refresh_caption_osd(false);
         return 0;
     case Player::WM_PLAYER_STATE:
         player_.consume_notify();
         update_title();
         update_seek_bar();
+        note_playback_time(player_.state().time_pos);
+        refresh_caption_osd(false);
         return 0;
     case WM_PARENTNOTIFY:
         if (LOWORD(wparam) == WM_LBUTTONDOWN || LOWORD(wparam) == WM_RBUTTONDOWN)
@@ -1495,10 +1623,13 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
             update_title();
             if (!seeking_ && clip_dragging_ == ClipMark::None)
                 update_seek_bar();
+            note_playback_time(player_.state().time_pos);
+            refresh_caption_osd(false);
         }
         return 0;
     case WM_DESTROY:
         KillTimer(hwnd, kTimerStatus);
+        captions_.reset();
         player_.shutdown();
         if (context_menu_) {
             DestroyMenu(context_menu_);

@@ -1,0 +1,42 @@
+upPlayer third-party notices
+============================
+
+This NOTICE covers components that are not licensed under the MIT License in
+LICENSE. The MIT License applies only to upPlayer's own source and docs.
+
+mpv
+---
+Playback uses [mpv](https://mpv.io/) (headers via `third_party/mpv`, and at
+runtime `mpv.exe` and/or `libmpv`).
+
+mpv is licensed under GPLv2+ by default, or LGPLv2.1+ when built without GPL-only
+files. See `third_party/mpv/Copyright`, `third_party/mpv/LICENSE.GPL`, and
+`third_party/mpv/LICENSE.LGPL`.
+
+If you redistribute builds that include mpv binaries or libmpv, you must comply
+with the applicable mpv license (including source offer obligations where GPL
+applies).
+
+PotPlayer Whisper module
+------------------------
+Auto-caption support can invoke binaries copied from a local PotPlayer install
+into `third_party/potplayer-whisper` (from
+`C:\Program Files\DAUM\PotPlayer\Module\Whisper`).
+
+Those binaries and related files are proprietary to PotPlayer / Kakao Corp
+(or its licensors). They are:
+
+- not part of the upPlayer MIT-licensed codebase
+- not redistributed by this repository (gitignored)
+- for local use only if your PotPlayer license allows copying them onto the same
+  machine for personal use
+
+Do not publish or ship PotPlayer Whisper binaries with upPlayer releases unless
+you have permission from the rights holder. Prefer documenting that users copy
+the module from their own PotPlayer installation.
+
+Whisper models
+--------------
+Model files such as `ggml-*.bin` are separate downloads (for example from
+PotPlayer's model folder or other Whisper model sources). They are not covered
+by the upPlayer MIT License; follow the license of the model provider.

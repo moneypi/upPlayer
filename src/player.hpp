@@ -62,6 +62,9 @@ public:
     void toggle_mute();
     void take_snapshot();
     void show_osd(const std::string& text, int duration_ms = 1200);
+    // PotPlayer-like bottom caption (ASS overlay); empty text clears it.
+    void show_caption(const std::string& text);
+    void clear_caption();
 
     void poll();
     void consume_notify();

@@ -138,6 +138,16 @@ Get-ChildItem $mpvRoot -File -Filter "*.dll" | ForEach-Object {
     Copy-Item $_.FullName $PkgDir -Force
 }
 
+foreach ($doc in @("LICENSE", "NOTICE", "CHANGELOG.md", "README.md")) {
+    $src = Join-Path $Root $doc
+    if (Test-Path $src) {
+        Copy-Item $src $PkgDir -Force
+    }
+}
+
+# Do not bundle PotPlayer Whisper binaries in public releases (proprietary).
+# Users copy Module\Whisper locally; see NOTICE / README.
+
 $fonts = Join-Path $mpvRoot "mpv\fonts.conf"
 if (Test-Path $fonts) {
     New-Item -ItemType Directory -Force -Path (Join-Path $PkgDir "mpv") | Out-Null

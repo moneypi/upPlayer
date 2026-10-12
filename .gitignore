@@ -4,3 +4,6 @@
 /CMakeUserPresets.json
 *.user
 /third_party/libmpv-win/
+/third_party/potplayer-whisper/**
+!/third_party/potplayer-whisper/README.md
+/third_party/whisper-win/

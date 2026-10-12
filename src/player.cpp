@@ -1051,6 +1051,45 @@ void Player::show_osd(const std::string& text, int duration_ms) {
     post({"show-text", text, ms});
 }
 
+namespace {
+
+std::string EscapeAssText(const std::string& text) {
+    std::string out;
+    out.reserve(text.size() + 8);
+    for (unsigned char c : text) {
+        if (c == '\\')
+            out += "\\\\";
+        else if (c == '{')
+            out += "\\{";
+        else if (c == '}')
+            out += "\\}";
+        else if (c == '\n' || c == '\r')
+            out += "\\N";
+        else
+            out.push_back(static_cast<char>(c));
+    }
+    return out;
+}
+
+}  // namespace
+
+void Player::show_caption(const std::string& text) {
+    if (text.empty()) {
+        clear_caption();
+        return;
+    }
+    // PotPlayer-like: bottom-center, YaHei, white fill, thick black outline + soft shadow.
+    const std::string data =
+        "{\\an2\\fnMicrosoft YaHei UI\\fs52\\b0\\bord3.2\\shad1.2\\1c&H00FFFFFF&\\3c&H00000000&"
+        "\\4c&H80000000&\\q2\\fsp0}" +
+        EscapeAssText(text);
+    post({"osd-overlay", "10", "ass-events", data, "1920", "1080"});
+}
+
+void Player::clear_caption() {
+    post({"osd-overlay", "10", "none", ""});
+}
+
 void Player::toggle_mute() {
     bool muted = false;
     {

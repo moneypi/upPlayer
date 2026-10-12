@@ -4,7 +4,7 @@ param(
     [string]$Configuration = "Release",
     [string]$OutDir = "",
     [string]$ReleaseTag = "latest",
-    [string]$AppVersion = "1.0.0",
+    [string]$AppVersion = "",
     [switch]$SkipPackage,
     [switch]$NsisOnly,
     [switch]$InnoOnly,
@@ -13,13 +13,29 @@ param(
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
+
+function Get-UpPlayerVersion {
+    $header = Join-Path $Root "src\version.hpp"
+    if (-not (Test-Path $header)) { return "0.0.0" }
+    $text = Get-Content $header -Raw
+    if ($text -match 'UPPLAYER_VERSION_STRING\s+"([^"]+)"') {
+        return $Matches[1]
+    }
+    return "0.0.0"
+}
+
+if (-not $AppVersion) {
+    $AppVersion = Get-UpPlayerVersion
+}
+Write-Host "AppVersion=$AppVersion"
+
 if (-not $OutDir) {
     $OutDir = Join-Path $Root "build\dist"
 }
 $PkgDir = Join-Path $OutDir "package"
 $Nsi = Join-Path $PSScriptRoot "upPlayer.nsi"
 $Iss = Join-Path $PSScriptRoot "upPlayer.iss"
-$SetupOut = Join-Path $OutDir "upPlayer-Setup-x64.exe"
+$SetupOut = Join-Path $OutDir "upPlayer-Setup-x64-$AppVersion.exe"
 
 function Find-MakeNsis {
     $candidates = @(
