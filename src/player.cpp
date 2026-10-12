@@ -1101,6 +1101,44 @@ void Player::clear_caption() {
     post({"osd-overlay", "10", "none", ""});
 }
 
+void Player::screenshot_to_file(const std::wstring& path) {
+    if (path.empty())
+        return;
+    // Async only — do not wait; YOLO skips frames if this lags.
+    post({"screenshot-to-file", WideToUtf8(path), "video"});
+}
+
+void Player::show_yolo_overlay(const std::string& ass_events, int res_w, int res_h) {
+    if (ass_events.empty()) {
+        post({"osd-overlay", "11", "none", ""});
+        return;
+    }
+    if (res_w <= 0)
+        res_w = 1920;
+    if (res_h <= 0)
+        res_h = 1080;
+    post({"osd-overlay", "11", "ass-events", ass_events, std::to_string(res_w), std::to_string(res_h)});
+}
+
+void Player::show_yolo_boxes_bgra(const std::wstring& bgra_path, int width, int height, int stride,
+                                  int osd_x, int osd_y, int display_w, int display_h) {
+    if (bgra_path.empty() || width <= 0 || height <= 0 || stride < width * 4 || display_w <= 0 ||
+        display_h <= 0) {
+        post({"overlay-remove", "12"});
+        return;
+    }
+    // overlay-add id x y file offset fmt w h stride dw dh
+    // x/y/dw/dh are OSD pixels (video letterbox inside the VO window).
+    post({"overlay-add", "12", std::to_string(osd_x), std::to_string(osd_y), WideToUtf8(bgra_path), "0",
+          "bgra", std::to_string(width), std::to_string(height), std::to_string(stride),
+          std::to_string(display_w), std::to_string(display_h)});
+}
+
+void Player::clear_yolo_overlay() {
+    post({"osd-overlay", "11", "none", ""});
+    post({"overlay-remove", "12"});
+}
+
 void Player::toggle_mute() {
     bool muted = false;
     {

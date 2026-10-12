@@ -2,7 +2,7 @@
 
 Lightweight Windows video player front-end for [mpv](https://mpv.io/). Opens local files and network URLs, embeds playback in a Win32 window, and includes a simple seek bar.
 
-**Version:** 0.3.4 (right-click → **About upPlayer…**) — see [CHANGELOG](CHANGELOG.md)
+**Version:** 0.4.0 (right-click → **About upPlayer…**) — see [CHANGELOG](CHANGELOG.md)
 
 **License:** upPlayer source is [MIT](LICENSE). Third-party components (mpv, PotPlayer Whisper binaries, models) have their own terms — see [NOTICE](NOTICE).
 
@@ -80,6 +80,7 @@ Publish a GitHub release (tag + setup asset):
 | **Mouse wheel** | Volume up / down (over video or seek bar) |
 | **s** | Take snapshot (saved to Desktop) |
 | **a** | Toggle live auto captions (PotPlayer Whisper Vulkan/CPU) |
+| **y** | Toggle YOLO26 detection (skips busy frames; never stalls play) |
 | **z** | Mark clip In (A); pauses; selects In for `,` / `.` nudge |
 | **x** | Mark clip Out (B); pauses; selects Out for `,` / `.` nudge |
 | **,** / **.** | Nudge selected mark ±1 frame (or frame-step if none selected) |
@@ -93,6 +94,15 @@ Numpad **1–6** work the same as the top-row digits. Keyboard volume keys also 
 Bottom bar: seek slider on the left, volume slider on the right (drag to set 0–100; muted shows empty). Clip In (green) / Out (orange) marks can be dragged on the seek bar; `,` / `.` nudge the selected mark by one frame (right-click → **Clip** to clear).
 
 Clip export runs a separate `mpv.exe` with `--stream-record` (same binary used for playback; release zip bundles it). Output is a remux dump, so In may snap to a nearby keyframe.
+
+### YOLO26 detection
+
+Press **y** to toggle Ultralytics YOLO26n boxes/labels. Inference is async; busy frames are skipped so playback never stalls.
+
+```powershell
+.\scripts\fetch-yolo-deps.ps1   # ONNX Runtime + yolo26n.onnx
+# then rebuild
+```
 
 ### Auto captions
 

@@ -40,3 +40,10 @@ Whisper models
 Model files such as `ggml-*.bin` are separate downloads (for example from
 PotPlayer's model folder or other Whisper model sources). They are not covered
 by the upPlayer MIT License; follow the license of the model provider.
+
+Ultralytics YOLO26 + ONNX Runtime
+---------------------------------
+Optional object detection uses Ultralytics YOLO26 weights (exported to ONNX) and
+Microsoft ONNX Runtime. Those components have their own licenses; they are not
+part of the upPlayer MIT-licensed source. Fetch locally with
+`scripts/fetch-yolo-deps.ps1` (see `third_party/yolo26/README.md`).

@@ -65,6 +65,14 @@ public:
     // PotPlayer-like bottom caption (ASS overlay); empty text clears it.
     void show_caption(const std::string& text);
     void clear_caption();
+    // Fire-and-forget video frame grab (never waits). Used by YOLO worker.
+    void screenshot_to_file(const std::wstring& path);
+    // YOLO detection overlay: ASS HUD (osd id 11) + optional BGRA box bitmap (overlay id 12).
+    void show_yolo_overlay(const std::string& ass_events, int res_w, int res_h);
+    // Place BGRA boxes on the letterboxed video rect (OSD coords): (x,y) + display size (dw,dh).
+    void show_yolo_boxes_bgra(const std::wstring& bgra_path, int width, int height, int stride,
+                              int osd_x, int osd_y, int display_w, int display_h);
+    void clear_yolo_overlay();
 
     void poll();
     void consume_notify();

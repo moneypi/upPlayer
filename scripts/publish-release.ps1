@@ -53,7 +53,7 @@ if (-not $notesBody) {
 $notes = @"
 ## upPlayer $Tag
 
-Windows setup installer (NSIS), installs to ``C:\Program Files\upPlayer``.
+Windows setup installer (choose folder; Finish / Start). Default: ``C:\Program Files\upPlayer``.
 
 ### Changes
 $notesBody
@@ -61,7 +61,7 @@ $notesBody
 ### Install
 Run ``upPlayer-Setup-x64-$Version.exe`` (admin / UAC).
 
-Auto captions need a local PotPlayer Whisper module copy (not bundled; see NOTICE).
+Auto captions use PotPlayer Whisper when shipped with the build or found next to the app / from a PotPlayer install (see NOTICE).
 "@
 
 if (-not $SkipPush) {
