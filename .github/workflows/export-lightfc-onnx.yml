@@ -1,0 +1,77 @@
+﻿name: Export LightFC ONNX
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout upPlayer (export script)
+        uses: actions/checkout@v4
+        with:
+          path: upPlayer
+
+      - name: Checkout LightFC
+        uses: actions/checkout@v4
+        with:
+          repository: LiYunfengLYF/LightFC
+          path: LightFC
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: |
+          python -m pip install -U pip
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install pyyaml easydict onnx onnxsim gdown onnxruntime
+
+      - name: Download official checkpoint
+        run: |
+          gdown "https://drive.google.com/uc?id=1ns7NQJCt078547X483skqjX1qM1rBqLP" -O outputs.zip
+          ls -lh outputs.zip
+          mkdir -p ckpt_extract
+          unzip -q outputs.zip -d ckpt_extract
+          CKPT=$(find ckpt_extract -name 'lightfc_ep*.pth.tar' | head -n1)
+          echo "CKPT=$CKPT"
+          test -n "$CKPT"
+          echo "CKPT=$CKPT" >> "$GITHUB_ENV"
+          ls -lh "$CKPT"
+
+      - name: Export ONNX
+        run: |
+          python upPlayer/scripts/export-lightfc-onnx.py \
+            --src LightFC \
+            --ckpt "$CKPT" \
+            --out .
+          ls -lh lightfc_z.onnx lightfc_x.onnx
+
+      - name: Print I/O tensor shapes
+        run: |
+          python - <<'PY'
+          import onnx
+          from onnx import numpy_helper
+          for path in ("lightfc_z.onnx", "lightfc_x.onnx"):
+              m = onnx.load(path)
+              print("===", path, "===")
+              for inp in m.graph.input:
+                  dims = [d.dim_value or d.dim_param for d in inp.type.tensor_type.shape.dim]
+                  print("  in ", inp.name, dims)
+              for out in m.graph.output:
+                  dims = [d.dim_value or d.dim_param for d in out.type.tensor_type.shape.dim]
+                  print("  out", out.name, dims)
+          PY
+
+      - name: Upload to release v0.4.0
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload v0.4.0 lightfc_z.onnx lightfc_x.onnx --repo moneypi/upPlayer --clobber
+          echo "Uploaded:"
+          gh release view v0.4.0 --repo moneypi/upPlayer --json assets --jq '.assets[] | select(.name|startswith("lightfc")) | {name,size,url:.url}'
