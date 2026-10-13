@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.0
+
+- Auto captions use MIT whisper.cpp with a warm whisper-server (no per-chunk process spawn)
+- Releases package the open whisper CLI and model; PotPlayer Whisper is no longer shipped
+
 ## 0.5.1
 
 - Match CLI RTSP latency: spawn `mpv --profile=low-latency --untimed <url>` with URL on argv

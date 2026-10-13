@@ -2,7 +2,7 @@
 
 Lightweight Windows video player front-end for [mpv](https://mpv.io/). Opens local files and network URLs, embeds playback in a Win32 window, and includes a simple seek bar.
 
-**Version:** 0.5.1 (right-click → **About upPlayer…**) — see [CHANGELOG](CHANGELOG.md)
+**Version:** 0.6.0 (right-click → **About upPlayer…**) — see [CHANGELOG](CHANGELOG.md)
 
 **License:** upPlayer source is [MIT](LICENSE). Third-party components (mpv, whisper.cpp, models) have their own terms — see [NOTICE](NOTICE).
 
