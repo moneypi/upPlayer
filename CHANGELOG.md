@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.0
+
+- LightFC single-object tracking (hotkey **t**): arm → click target → cyan box overlay; async ONNX, skip busy frames
+
 ## 0.4.0
 
 - YOLO26 object detection overlay (hotkey **y**): async ONNX Runtime inference; skip busy frames so playback never stalls

@@ -3,6 +3,7 @@
 #include "resource.h"
 #include "version.hpp"
 #include "yolo_worker.hpp"
+#include "lightfc_worker.hpp"
 
 #include <commctrl.h>
 #include <commdlg.h>
@@ -305,6 +306,11 @@ private:
     void set_yolo_mode(YoloMode mode);
     void tick_yolo();
     void refresh_yolo_osd();
+    void cycle_lightfc_mode();
+    void set_lightfc_mode(LightFcMode mode);
+    void tick_lightfc();
+    void refresh_lightfc_osd();
+    bool lightfc_click_select(int client_x, int client_y);
     void note_playback_time(double time_pos);
     void show_about();
 
@@ -316,6 +322,7 @@ private:
     Player player_;
     std::unique_ptr<CaptionWorker> captions_;
     std::unique_ptr<YoloWorker> yolo_;
+    std::unique_ptr<LightFcWorker> lightfc_;
     std::wstring shown_title_;
     std::wstring last_caption_osd_;
     std::vector<std::wstring> pending_files_;
@@ -410,6 +417,7 @@ bool App::create(int show, const std::vector<std::wstring>& files) {
 
     captions_ = std::make_unique<CaptionWorker>(hwnd_);
     yolo_ = std::make_unique<YoloWorker>(hwnd_);
+    lightfc_ = std::make_unique<LightFcWorker>(hwnd_);
 
     if (!player_.start(video_, hwnd_)) {
         MessageBoxW(hwnd_, player_.start_error().c_str(), L"upPlayer", MB_ICONERROR);
@@ -496,6 +504,10 @@ bool App::handle_playback_key(UINT message, WPARAM wparam) {
         case L'y':
         case L'Y':
             cycle_yolo_mode();
+            return true;
+        case L't':
+        case L'T':
+            cycle_lightfc_mode();
             return true;
         default:
             return false;
@@ -596,6 +608,14 @@ LRESULT CALLBACK App::VideoProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM l
         SetFocus(hwnd);
         if (app->suppress_click_pause_) {
             app->suppress_click_pause_ = false;
+        } else if (app->lightfc_ && app->lightfc_->enabled()) {
+            // Arm or Tracking: click (re)selects target; outside letterbox still pauses.
+            const int x = GET_X_LPARAM(lparam);
+            const int y = GET_Y_LPARAM(lparam);
+            if (app->lightfc_click_select(x, y))
+                return 0;
+            if (app->player_.state().has_media)
+                app->player_.toggle_pause();
         } else if (app->player_.state().has_media) {
             app->player_.toggle_pause();
         }
@@ -707,6 +727,7 @@ void App::create_children() {
     HMENU overlay_menu = CreatePopupMenu();
     AppendMenuW(overlay_menu, MF_STRING, ID_CAPTIONS_TOGGLE, L"Auto Captions\ta");
     AppendMenuW(overlay_menu, MF_STRING, ID_YOLO_TOGGLE, L"YOLO26 Detect\ty");
+    AppendMenuW(overlay_menu, MF_STRING, ID_LIGHTFC_TOGGLE, L"LightFC Track\tt");
 
     context_menu_ = CreatePopupMenu();
     AppendMenuW(context_menu_, MF_STRING, ID_FILE_OPEN, L"Open...\tCtrl+O");
@@ -733,6 +754,8 @@ void App::show_context_menu(int screen_x, int screen_y) {
                   MF_BYCOMMAND | ((captions_ && captions_->enabled()) ? MF_CHECKED : MF_UNCHECKED));
     CheckMenuItem(context_menu_, ID_YOLO_TOGGLE,
                   MF_BYCOMMAND | ((yolo_ && yolo_->enabled()) ? MF_CHECKED : MF_UNCHECKED));
+    CheckMenuItem(context_menu_, ID_LIGHTFC_TOGGLE,
+                  MF_BYCOMMAND | ((lightfc_ && lightfc_->enabled()) ? MF_CHECKED : MF_UNCHECKED));
     SetForegroundWindow(hwnd_);
     TrackPopupMenu(context_menu_, TPM_RIGHTBUTTON | TPM_LEFTALIGN | TPM_TOPALIGN,
                    screen_x, screen_y, 0, hwnd_, nullptr);
@@ -1291,6 +1314,122 @@ void App::cycle_yolo_mode() {
     set_yolo_mode(yolo_->enabled() ? YoloMode::Off : YoloMode::On);
 }
 
+void App::set_lightfc_mode(LightFcMode mode) {
+    if (!lightfc_)
+        return;
+    lightfc_->set_mode(mode);
+    if (mode == LightFcMode::Off) {
+        player_.clear_track_overlay();
+        player_.show_osd("LightFC off", 1000);
+    } else if (mode == LightFcMode::Arm) {
+        player_.show_osd("LightFC: click a target", 1600);
+    } else {
+        player_.show_osd("LightFC tracking", 1200);
+        tick_lightfc();
+    }
+}
+
+void App::cycle_lightfc_mode() {
+    if (!lightfc_)
+        return;
+    if (lightfc_->enabled())
+        set_lightfc_mode(LightFcMode::Off);
+    else
+        set_lightfc_mode(LightFcMode::Arm);
+}
+
+bool App::lightfc_click_select(int client_x, int client_y) {
+    // Arm = first select; Tracking = click again to reselect.
+    if (!lightfc_ || !lightfc_->enabled() || !video_)
+        return false;
+    const PlayerState st = player_.state();
+    if (!st.has_media || st.width <= 0 || st.height <= 0)
+        return false;
+
+    RECT rc{};
+    GetClientRect(video_, &rc);
+    const int vo_w = (std::max)(1, static_cast<int>(rc.right - rc.left));
+    const int vo_h = (std::max)(1, static_cast<int>(rc.bottom - rc.top));
+    const double scale =
+        (std::min)(static_cast<double>(vo_w) / st.width, static_cast<double>(vo_h) / st.height);
+    const int dw = (std::max)(1, static_cast<int>(std::lround(st.width * scale)));
+    const int dh = (std::max)(1, static_cast<int>(std::lround(st.height * scale)));
+    const int ml = (vo_w - dw) / 2;
+    const int mt = (vo_h - dh) / 2;
+    if (client_x < ml || client_y < mt || client_x >= ml + dw || client_y >= mt + dh)
+        return false;
+
+    const float fx = static_cast<float>((client_x - ml) / scale);
+    const float fy = static_cast<float>((client_y - mt) / scale);
+    const float side = static_cast<float>((std::min)(st.width, st.height)) * 0.14f;
+    LightFcBox box;
+    box.w = side;
+    box.h = side;
+    box.x = fx - 0.5f * side;
+    box.y = fy - 0.5f * side;
+    box.score = 1.f;
+    if (!lightfc_->init_at(box))
+        return false;
+    player_.show_osd("LightFC: locking…", 1000);
+    tick_lightfc();
+    return true;
+}
+
+void App::tick_lightfc() {
+    if (!lightfc_ || !lightfc_->enabled())
+        return;
+    const PlayerState playback = player_.state();
+    if (!playback.has_media || playback.paused)
+        return;
+    lightfc_->pump();
+    const std::wstring path = lightfc_->try_begin_capture();
+    if (path.empty())
+        return;
+    DeleteFileW(path.c_str());
+    player_.screenshot_to_file(path);
+    lightfc_->notify_capture_requested(path);
+}
+
+void App::refresh_lightfc_osd() {
+    if (!lightfc_)
+        return;
+    if (!lightfc_->enabled()) {
+        player_.clear_track_overlay();
+        return;
+    }
+    if (lightfc_->arming()) {
+        player_.clear_track_overlay();
+        const std::wstring status = lightfc_->status_text();
+        if (!status.empty())
+            player_.show_osd(WideToUtf8(status), 1800);
+        return;
+    }
+    const int ow = lightfc_->overlay_width();
+    const int oh = lightfc_->overlay_height();
+    const std::wstring bgra = lightfc_->overlay_bgra_path();
+    if (!bgra.empty() && ow > 0 && oh > 0 && video_) {
+        RECT rc{};
+        GetClientRect(video_, &rc);
+        const int vo_w = (std::max)(1, static_cast<int>(rc.right - rc.left));
+        const int vo_h = (std::max)(1, static_cast<int>(rc.bottom - rc.top));
+        const PlayerState st = player_.state();
+        const int iw = st.width > 0 ? st.width : ow;
+        const int ih = st.height > 0 ? st.height : oh;
+        const double scale =
+            (std::min)(static_cast<double>(vo_w) / iw, static_cast<double>(vo_h) / ih);
+        const int dw = (std::max)(1, static_cast<int>(std::lround(iw * scale)));
+        const int dh = (std::max)(1, static_cast<int>(std::lround(ih * scale)));
+        const int ml = (vo_w - dw) / 2;
+        const int mt = (vo_h - dh) / 2;
+        player_.show_track_boxes_bgra(bgra, ow, oh, lightfc_->overlay_stride(), ml, mt, dw, dh);
+    } else {
+        player_.show_track_boxes_bgra({}, 0, 0, 0, 0, 0, 0, 0);
+    }
+    const std::wstring status = lightfc_->status_text();
+    if (!status.empty())
+        player_.show_osd(WideToUtf8(status), 1400);
+}
+
 void App::tick_yolo() {
     if (!yolo_ || !yolo_->enabled())
         return;
@@ -1647,6 +1786,9 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
         case ID_YOLO_TOGGLE:
             cycle_yolo_mode();
             return 0;
+        case ID_LIGHTFC_TOGGLE:
+            cycle_lightfc_mode();
+            return 0;
         default:
             break;
         }
@@ -1656,6 +1798,9 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
         return 0;
     case YoloWorker::WM_YOLO_UPDATE:
         refresh_yolo_osd();
+        return 0;
+    case LightFcWorker::WM_LIGHTFC_UPDATE:
+        refresh_lightfc_osd();
         return 0;
     case WM_DROPFILES: {
         HDROP drop = reinterpret_cast<HDROP>(wparam);
@@ -1720,10 +1865,12 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
             note_playback_time(player_.state().time_pos);
             refresh_caption_osd(false);
             tick_yolo();
+            tick_lightfc();
         }
         return 0;
     case WM_DESTROY:
         KillTimer(hwnd, kTimerStatus);
+        lightfc_.reset();
         yolo_.reset();
         captions_.reset();
         player_.shutdown();

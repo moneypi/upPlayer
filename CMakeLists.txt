@@ -17,6 +17,8 @@ add_executable(upPlayer WIN32
   src/whisper_runtime.cpp
   src/yolo_runtime.cpp
   src/yolo_worker.cpp
+  src/lightfc_runtime.cpp
+  src/lightfc_worker.cpp
   src/upplayer.rc
 )
 
@@ -45,7 +47,7 @@ target_link_libraries(upPlayer PRIVATE comctl32 comdlg32 shell32 dwmapi imm32 wi
 set(ONNXRUNTIME_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/onnxruntime")
 if(EXISTS "${ONNXRUNTIME_DIR}/include/onnxruntime_cxx_api.h" AND
    EXISTS "${ONNXRUNTIME_DIR}/lib/onnxruntime.lib")
-  message(STATUS "ONNX Runtime found — YOLO26 enabled")
+  message(STATUS "ONNX Runtime found — YOLO26 / LightFC enabled")
   target_compile_definitions(upPlayer PRIVATE UPPLAYER_HAS_ONNXRUNTIME=1)
   target_include_directories(upPlayer PRIVATE "${ONNXRUNTIME_DIR}/include")
   target_link_libraries(upPlayer PRIVATE "${ONNXRUNTIME_DIR}/lib/onnxruntime.lib")
@@ -58,7 +60,7 @@ if(EXISTS "${ONNXRUNTIME_DIR}/include/onnxruntime_cxx_api.h" AND
             "$<TARGET_FILE_DIR:upPlayer>"
     VERBATIM)
 else()
-  message(STATUS "ONNX Runtime not found — YOLO26 disabled (run scripts/fetch-yolo-deps.ps1)")
+  message(STATUS "ONNX Runtime not found — YOLO26/LightFC disabled (run scripts/fetch-yolo-deps.ps1)")
 endif()
 
 set(YOLO26_ONNX "${CMAKE_CURRENT_SOURCE_DIR}/third_party/yolo26/yolo26n.onnx")
@@ -68,6 +70,20 @@ if(EXISTS "${YOLO26_ONNX}")
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${YOLO26_ONNX}"
             "$<TARGET_FILE_DIR:upPlayer>/yolo26/yolo26n.onnx"
+    VERBATIM)
+endif()
+
+set(LIGHTFC_Z_ONNX "${CMAKE_CURRENT_SOURCE_DIR}/third_party/lightfc/lightfc_z.onnx")
+set(LIGHTFC_X_ONNX "${CMAKE_CURRENT_SOURCE_DIR}/third_party/lightfc/lightfc_x.onnx")
+if(EXISTS "${LIGHTFC_Z_ONNX}" AND EXISTS "${LIGHTFC_X_ONNX}")
+  add_custom_command(TARGET upPlayer POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:upPlayer>/lightfc"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${LIGHTFC_Z_ONNX}"
+            "$<TARGET_FILE_DIR:upPlayer>/lightfc/lightfc_z.onnx"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${LIGHTFC_X_ONNX}"
+            "$<TARGET_FILE_DIR:upPlayer>/lightfc/lightfc_x.onnx"
     VERBATIM)
 endif()
 

@@ -47,3 +47,10 @@ Optional object detection uses Ultralytics YOLO26 weights (exported to ONNX) and
 Microsoft ONNX Runtime. Those components have their own licenses; they are not
 part of the upPlayer MIT-licensed source. Fetch locally with
 `scripts/fetch-yolo-deps.ps1` (see `third_party/yolo26/README.md`).
+
+LightFC
+-------
+Optional single-object tracking uses LightFC (MobileNetV2) weights exported to
+ONNX. LightFC and its dependencies have their own licenses; they are not part of
+the upPlayer MIT-licensed source. Fetch/export with
+`scripts/fetch-lightfc-deps.ps1` (see `third_party/lightfc/README.md`).

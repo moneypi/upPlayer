@@ -1139,6 +1139,22 @@ void Player::clear_yolo_overlay() {
     post({"overlay-remove", "12"});
 }
 
+void Player::show_track_boxes_bgra(const std::wstring& bgra_path, int width, int height, int stride,
+                                   int osd_x, int osd_y, int display_w, int display_h) {
+    if (bgra_path.empty() || width <= 0 || height <= 0 || stride < width * 4 || display_w <= 0 ||
+        display_h <= 0) {
+        post({"overlay-remove", "13"});
+        return;
+    }
+    post({"overlay-add", "13", std::to_string(osd_x), std::to_string(osd_y), WideToUtf8(bgra_path), "0",
+          "bgra", std::to_string(width), std::to_string(height), std::to_string(stride),
+          std::to_string(display_w), std::to_string(display_h)});
+}
+
+void Player::clear_track_overlay() {
+    post({"overlay-remove", "13"});
+}
+
 void Player::toggle_mute() {
     bool muted = false;
     {

@@ -10,3 +10,6 @@
 /third_party/onnxruntime/
 /third_party/yolo26/**
 !/third_party/yolo26/README.md
+/third_party/lightfc/**
+!/third_party/lightfc/README.md
+/third_party/LightFC-src/

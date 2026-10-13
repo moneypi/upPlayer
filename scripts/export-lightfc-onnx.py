@@ -33,7 +33,8 @@ def main() -> int:
         )
     cfg = load_yaml(str(yaml_path))
     network = LightFC(cfg=cfg, env_num=None, training=False)
-    ckpt = torch.load(str(args.ckpt), map_location="cpu")
+    # Official LightFC checkpoints are full training pickles (not weights-only).
+    ckpt = torch.load(str(args.ckpt), map_location="cpu", weights_only=False)
     state = ckpt["net"] if isinstance(ckpt, dict) and "net" in ckpt else ckpt
     network.load_state_dict(state, strict=True)
     for module in network.modules():

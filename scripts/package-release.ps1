@@ -193,6 +193,25 @@ if ($ortDll) {
     Write-Host "Including ONNX Runtime from $(Split-Path $ortDll -Parent)"
 }
 
+# LightFC (optional)
+$lfcZCandidates = @(
+    (Join-Path (Split-Path $Exe -Parent) "lightfc\lightfc_z.onnx"),
+    (Join-Path $Root "third_party\lightfc\lightfc_z.onnx")
+)
+$lfcXCandidates = @(
+    (Join-Path (Split-Path $Exe -Parent) "lightfc\lightfc_x.onnx"),
+    (Join-Path $Root "third_party\lightfc\lightfc_x.onnx")
+)
+$lfcZ = $lfcZCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+$lfcX = $lfcXCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if ($lfcZ -and $lfcX) {
+    $lfcDest = Join-Path $PkgDir "lightfc"
+    New-Item -ItemType Directory -Force -Path $lfcDest | Out-Null
+    Copy-Item $lfcZ (Join-Path $lfcDest "lightfc_z.onnx") -Force
+    Copy-Item $lfcX (Join-Path $lfcDest "lightfc_x.onnx") -Force
+    Write-Host "Including LightFC models"
+}
+
 $fonts = Join-Path $mpvRoot "mpv\fonts.conf"
 if (Test-Path $fonts) {
     New-Item -ItemType Directory -Force -Path (Join-Path $PkgDir "mpv") | Out-Null

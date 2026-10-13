@@ -73,6 +73,10 @@ public:
     void show_yolo_boxes_bgra(const std::wstring& bgra_path, int width, int height, int stride,
                               int osd_x, int osd_y, int display_w, int display_h);
     void clear_yolo_overlay();
+    // LightFC track overlay (overlay id 13).
+    void show_track_boxes_bgra(const std::wstring& bgra_path, int width, int height, int stride,
+                               int osd_x, int osd_y, int display_w, int display_h);
+    void clear_track_overlay();
 
     void poll();
     void consume_notify();
