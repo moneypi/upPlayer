@@ -1,4 +1,4 @@
-# upPlayer
+# upPlayer — Dedicated to building an AI player with the lowest latency
 
 Lightweight Windows video player front-end for [mpv](https://mpv.io/). Opens local files and network URLs, embeds playback in a Win32 window, and includes a simple seek bar.
 

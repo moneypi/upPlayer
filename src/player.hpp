@@ -44,9 +44,8 @@ public:
     bool load(const std::wstring& target);
     void append(const std::wstring& target);
     bool set_low_latency(bool enabled);
-    bool set_untimed(bool enabled);
-    // Re-apply latency knobs before a network load (always, not only on toggle).
-    bool prepare_network_latency(bool low_latency, bool untimed);
+    // One switch: enables CLI-equivalent --profile=low-latency --untimed together.
+    bool prepare_network_latency(bool low_latency);
     void toggle_pause();
     void set_pause(bool paused);
     void stop_playback();
@@ -86,7 +85,6 @@ public:
     PlayerState state() const;
     std::wstring current_path() const;
     bool low_latency() const;
-    bool untimed() const;
     bool running() const;
     const std::wstring& backend_label() const;
     const std::wstring& start_error() const;
@@ -95,9 +93,12 @@ private:
     struct Api;
 
     bool start_libmpv(HWND video, std::wstring& error);
-    // live_mode: CLI-equivalent --profile=low-latency --untimed (needed for RTSP; IPC apply is not enough).
-    bool start_exe(HWND video, std::wstring& error, bool live_mode);
-    bool restart_exe_live(bool live_mode);
+    // live_mode: CLI-equivalent --profile=low-latency --untimed. Pass initial_url on the
+    // process command line (same as `mpv --profile=low-latency --untimed <url>`); idle+IPC
+    // loadfile is not equivalent for RTSP latency.
+    bool start_exe(HWND video, std::wstring& error, bool live_mode,
+                   const std::wstring& initial_url = {});
+    bool restart_exe_live(bool live_mode, const std::wstring& initial_url = {});
     void fail_libmpv();
     void fail_exe();
     void apply_live_properties_libmpv(bool live);
@@ -142,7 +143,6 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<bool> reader_run_{false};
     std::atomic<bool> low_latency_{false};
-    std::atomic<bool> untimed_{false};
     std::atomic<bool> profile_applied_{false};
     std::atomic<bool> state_posted_{false};
     std::atomic<bool> wakeup_posted_{false};

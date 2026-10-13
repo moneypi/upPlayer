@@ -203,7 +203,6 @@ std::wstring ReadTextFileHead(const std::wstring& path, size_t max_chars = 800) 
 struct UrlDialogResult {
     std::wstring url;
     bool low_latency = true;
-    bool untimed = true;
 };
 
 INT_PTR CALLBACK UrlDlgProc(HWND dialog, UINT message, WPARAM wparam, LPARAM lparam) {
@@ -213,7 +212,6 @@ INT_PTR CALLBACK UrlDlgProc(HWND dialog, UINT message, WPARAM wparam, LPARAM lpa
         HWND edit = GetDlgItem(dialog, IDC_URL);
         SendMessageW(edit, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(L"https://example.com/video.mp4"));
         CheckDlgButton(dialog, IDC_LOW_LATENCY, BST_CHECKED);
-        CheckDlgButton(dialog, IDC_UNTIMED, BST_CHECKED);
         SetFocus(edit);
         return FALSE;
     }
@@ -231,7 +229,6 @@ INT_PTR CALLBACK UrlDlgProc(HWND dialog, UINT message, WPARAM wparam, LPARAM lpa
             if (out) {
                 out->url = url;
                 out->low_latency = IsDlgButtonChecked(dialog, IDC_LOW_LATENCY) == BST_CHECKED;
-                out->untimed = IsDlgButtonChecked(dialog, IDC_UNTIMED) == BST_CHECKED;
             }
             EndDialog(dialog, IDOK);
             return TRUE;
@@ -878,6 +875,8 @@ void App::update_title() {
         swprintf_s(speed, L" [%.1fx]", playback.speed);
         caption += speed;
     }
+    if (lightfc_ && lightfc_->enabled())
+        caption += L" [Track on]";
     if (caption != shown_title_) {
         shown_title_ = caption;
         SetWindowTextW(hwnd_, caption.c_str());
@@ -1248,7 +1247,7 @@ void App::open_url() {
                         reinterpret_cast<LPARAM>(&result)) != IDOK)
         return;
     player_.stop_playback();
-    if (!player_.prepare_network_latency(result.low_latency, result.untimed))
+    if (!player_.prepare_network_latency(result.low_latency))
         update_title();
     open_target(result.url, false);
     update_title();
@@ -1273,8 +1272,7 @@ void App::open_target(const std::wstring& target, bool auto_live_for_network) {
                              lower.rfind(L"http://", 0) == 0 || lower.rfind(L"https://", 0) == 0 ||
                              lower.rfind(L"rtmp://", 0) == 0 || lower.rfind(L"rtp://", 0) == 0 ||
                              lower.rfind(L"udp://", 0) == 0 || lower.rfind(L"tcp://", 0) == 0;
-        // CLI/drag-drop: restart mpv with real --profile=low-latency --untimed (IPC is not enough).
-        player_.prepare_network_latency(network, network);
+        player_.prepare_network_latency(network);
     }
     if (!player_.load(target))
         update_title();
@@ -1340,6 +1338,7 @@ void App::set_lightfc_mode(LightFcMode mode) {
         player_.show_osd("LightFC tracking", 1200);
         tick_lightfc();
     }
+    update_title();
 }
 
 void App::cycle_lightfc_mode() {

@@ -9,12 +9,14 @@ Low-latency RTSP/live playback is the most important feature of upPlayer. Prefer
 
 ## Requirements
 
-- Match or beat CLI `mpv --profile=low-latency --untimed <rtsp>` end-to-end latency.
-- Live flags that affect demuxer/lavf/RTSP must be on the **mpv process command line**. Applying `low-latency` / `untimed` over IPC after lavf opens the socket is too late and can leave multi-second buffering.
-- Network URLs (`rtsp://`, `rtsps://`, `rtmp://`, etc.) should enter live mode automatically (CLI/drag-drop/open).
-- Never ship `demuxer-lavf-o` with colon-separated keys; lavf options are **comma**-separated (`fflags=+nobuffer+flush_packets`). Colons break RTSP open.
+- Match CLI `mpv --profile=low-latency --untimed <rtsp>` end-to-end latency.
+- UI has one **low-latency** switch; it always enables both `--profile=low-latency` and `--untimed` together.
+- Live mode must spawn **mpv.exe** with those flags and the **URL on argv** (not idle + IPC `loadfile`).
+- Do **not** add “clever” demuxer knobs (`demuxer-thread=no`, tiny `demuxer-max-bytes`, etc.): they stall the reader and fill the OS TCP buffer (~10s behind CLI).
+- IPC `apply-profile` after lavf opens is too late; prefer exe backend over libmpv for live RTSP.
+- Network URLs (`rtsp://`, `rtsps://`, `rtmp://`, etc.) should enter live mode automatically.
 
 ## When changing player code
 
-- Test real RTSP open + visible video, not only IPC property toggles.
-- Do not regress live restart/`prepare_network_latency` for the sake of unrelated features.
+- Side-by-side test against CLI mpv on the same RTSP URL.
+- Do not regress live URL-on-cmdline spawn for unrelated features.

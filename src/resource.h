@@ -39,5 +39,4 @@
 #define IDD_URL 2002
 #define IDC_URL 2003
 #define IDC_LOW_LATENCY 2004
-#define IDC_UNTIMED 2005
 #define IDI_APP 100
