@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.1
+
+- Match CLI RTSP latency: spawn `mpv --profile=low-latency --untimed <url>` with URL on argv
+- Open URL: single **low-latency** checkbox (enables profile + untimed together)
+- Title shows **[Track on]** when LightFC track is armed/tracking
+- Auto captions: Douyin-style bold yellow text with thick black outline (bottom-center)
+
 ## 0.5.0
 
 - LightFC single-object tracking (hotkey **t**): arm → click target → cyan box overlay; async ONNX, skip busy frames
