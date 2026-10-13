@@ -1,17 +1,61 @@
 #include "caption_worker.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstdarg>
 #include <cstdio>
+#include <fstream>
 
 namespace {
 
-constexpr double kChunkSec = 8.0;
-constexpr double kOverlapSec = 0.8;
-constexpr double kLeadSec = 6.0;
-constexpr double kSeekSlack = 1.2;
+// Slightly shorter chunks finish sooner on CPU whisper.cpp (Vulkan was faster).
+constexpr double kChunkSec = 5.0;
+constexpr double kOverlapSec = 0.75;
+constexpr double kLeadSec = 10.0;
+// Only jump-forward after this much lag (seek / extreme stall). Smaller gaps must
+// still be transcribed — otherwise slow ASR silently skips sentences.
+constexpr double kMaxLagBeforeCatchUp = 25.0;
 constexpr size_t kSoftMaxChars = 32;
 constexpr size_t kPromptChars = 80;
+
+using SteadyClock = std::chrono::steady_clock;
+
+std::wstring CaptionDiagPath() {
+    wchar_t temp[MAX_PATH] = {};
+    GetTempPathW(MAX_PATH, temp);
+    return std::wstring(temp) + L"upplayer-captions-" + std::to_wstring(GetCurrentProcessId()) + L".log";
+}
+
+void CapDiag(const char* fmt, ...) {
+    static std::mutex log_mu;
+    static std::ofstream out;
+    static bool opened = false;
+    std::lock_guard<std::mutex> lock(log_mu);
+    if (!opened) {
+        const std::wstring path = CaptionDiagPath();
+        out.open(path, std::ios::out | std::ios::trunc);
+        opened = true;
+        if (out) {
+            out << "# caption delay diag pid=" << GetCurrentProcessId() << "\n";
+            out << "# wall_ms playhead covered lag chunk_start chunk_len extract_ms asr_ms segs event\n";
+            out.flush();
+        }
+    }
+    if (!out)
+        return;
+    const auto now = SteadyClock::now().time_since_epoch();
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
+    char line[1024];
+    va_list args;
+    va_start(args, fmt);
+    const int n = vsnprintf(line, sizeof(line), fmt, args);
+    va_end(args);
+    if (n <= 0)
+        return;
+    out << ms << " " << line << "\n";
+    out.flush();
+}
 
 std::wstring Quote(const std::wstring& arg) {
     std::wstring out = L"\"";
@@ -369,15 +413,32 @@ void CaptionWorker::thread_main() {
             start = covered_until_;
             if (start < 0.0)
                 start = 0.0;
-            if (time_pos_ > start + kChunkSec + kSeekSlack) {
-                // Playback jumped ahead of coverage; catch up from near playhead.
-                start = (std::max)(0.0, time_pos_ - 0.5);
+            const double playhead = time_pos_;
+            const double lag_before = playhead - start;
+            // If ASR is only a little behind, keep going sequentially (no gaps).
+            // Jump only when hopelessly behind; leave a lead window so catch-up still
+            // captions recent speech instead of discarding everything up to now.
+            if (playhead > start + kMaxLagBeforeCatchUp) {
+                const double jump_to = (std::max)(0.0, playhead - kLeadSec);
+                CapDiag("event=SKIP_CATCHUP playhead=%.3f covered=%.3f lag=%.3f -> jump_to=%.3f", playhead,
+                        start, lag_before, jump_to);
+                start = jump_to;
                 covered_until_ = start;
+                clear_from(start);
             }
         }
 
         if (!enabled || media.empty())
             continue;
+
+        double playhead_at_job = 0.0;
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            playhead_at_job = time_pos_;
+        }
+        CapDiag("event=JOB_BEGIN playhead=%.3f covered=%.3f lag=%.3f chunk_start=%.3f backend=%s",
+                playhead_at_job, start, playhead_at_job - start, start,
+                WideToUtf8(whisper_.backend_label()).c_str());
 
         {
             std::lock_guard<std::mutex> lock(mu_);
@@ -391,7 +452,7 @@ void CaptionWorker::thread_main() {
             std::lock_guard<std::mutex> lock(mu_);
             status_ = CaptionStatus::Error;
             status_text_ =
-                L"Whisper CLI not found — copy PotPlayer Module\\Whisper to potplayer-whisper next to upPlayer";
+                L"Whisper CLI not found — run scripts\\fetch-whisper-deps.ps1";
             if (notify_)
                 PostMessageW(notify_, WM_CAPTION_UPDATE, 0, 0);
             continue;
@@ -435,7 +496,13 @@ void CaptionWorker::thread_main() {
             PostMessageW(notify_, WM_CAPTION_UPDATE, 0, 0);
 
         std::wstring extract_error;
-        if (!extract_pcm(start, length, wav_path, &extract_error)) {
+        const auto t_extract0 = SteadyClock::now();
+        const bool extracted = extract_pcm(start, length, wav_path, &extract_error);
+        const double extract_ms =
+            std::chrono::duration<double, std::milli>(SteadyClock::now() - t_extract0).count();
+        if (!extracted) {
+            CapDiag("event=EXTRACT_FAIL playhead=%.3f chunk_start=%.3f chunk_len=%.3f extract_ms=%.0f",
+                    playhead_at_job, start, length, extract_ms);
             DeleteFileW(wav_path.c_str());
             std::lock_guard<std::mutex> lock(mu_);
             if (!enabled_)
@@ -453,6 +520,7 @@ void CaptionWorker::thread_main() {
             std::lock_guard<std::mutex> lock(mu_);
             stale = !enabled_ || media_path_ != media || std::fabs(seek_epoch_ - seek_epoch) > 0.001;
             if (stale) {
+                CapDiag("event=STALE_AFTER_EXTRACT chunk_start=%.3f", start);
                 DeleteFileW(wav_path.c_str());
                 continue;
             }
@@ -461,14 +529,23 @@ void CaptionWorker::thread_main() {
 
         std::vector<WhisperSegment> segments;
         std::wstring asr_error;
+        const auto t_asr0 = SteadyClock::now();
         const bool ok = whisper_.transcribe(wav_path, prompt, segments, &asr_error, language);
+        const double asr_ms =
+            std::chrono::duration<double, std::milli>(SteadyClock::now() - t_asr0).count();
         DeleteFileW(wav_path.c_str());
 
+        double playhead_after = 0.0;
         {
             std::lock_guard<std::mutex> lock(mu_);
-            if (!enabled_ || media_path_ != media || std::fabs(seek_epoch_ - seek_epoch) > 0.001)
+            playhead_after = time_pos_;
+            if (!enabled_ || media_path_ != media || std::fabs(seek_epoch_ - seek_epoch) > 0.001) {
+                CapDiag("event=STALE_AFTER_ASR chunk_start=%.3f extract_ms=%.0f asr_ms=%.0f", start, extract_ms,
+                        asr_ms);
                 continue;
+            }
             if (!ok) {
+                CapDiag("event=ASR_FAIL chunk_start=%.3f extract_ms=%.0f asr_ms=%.0f", start, extract_ms, asr_ms);
                 status_ = CaptionStatus::Error;
                 status_text_ = asr_error.empty() ? L"Whisper failed" : asr_error;
                 if (notify_)
@@ -482,12 +559,48 @@ void CaptionWorker::thread_main() {
                     asr_language_ = detected;
             }
 
+            int kept = 0;
+            int dropped = 0;
+            // whisper.cpp pads short WAV to ~30s; offsets often report to=30000 even for a
+            // 5s chunk. Clamp to the real chunk, then shift late results onto the playhead
+            // so the user still sees the sentence instead of a silent skip.
             for (const auto& seg : segments) {
-                const double t0 = start + seg.t0;
-                const double t1 = start + seg.t1;
-                if (t1 <= seek_epoch_ - 0.05)
+                double rel0 = seg.t0;
+                double rel1 = seg.t1;
+                if (rel0 < 0.0)
+                    rel0 = 0.0;
+                if (rel1 > length) {
+                    CapDiag("event=CLAMP_SEG raw_t0=%.3f raw_t1=%.3f chunk_len=%.3f text=%s",
+                            start + seg.t0, start + seg.t1, length, seg.text.c_str());
+                    rel1 = length;
+                }
+                if (rel0 >= length || rel1 <= rel0 + 0.05)
                     continue;
+                double t0 = start + rel0;
+                double t1 = start + rel1;
+                if (t1 <= seek_epoch_ - 0.05) {
+                    ++dropped;
+                    CapDiag("event=DROP_SEG t0=%.3f t1=%.3f seek_epoch=%.3f text=%s", t0, t1, seek_epoch_,
+                            seg.text.c_str());
+                    continue;
+                }
+                const double span = t1 - t0;
+                if (t1 <= playhead_after + 0.05) {
+                    // Entirely behind the playhead when ASR finished — show briefly now.
+                    const double show = (std::min)(4.0, (std::max)(1.6, span));
+                    CapDiag("event=LATE_SHIFT raw_t0=%.3f raw_t1=%.3f playhead=%.3f -> show=%.2fs text=%s",
+                            t0, t1, playhead_after, show, seg.text.c_str());
+                    t0 = playhead_after;
+                    t1 = playhead_after + show;
+                } else if (t0 < playhead_after) {
+                    CapDiag("event=LATE_TRIM raw_t0=%.3f t1=%.3f playhead=%.3f text=%s", t0, t1,
+                            playhead_after, seg.text.c_str());
+                    t0 = playhead_after;
+                    if (t1 <= t0 + 0.4)
+                        t1 = t0 + (std::min)(2.5, (std::max)(1.2, span));
+                }
                 AppendSplitCues(cues_, t0, t1, utf8_to_wide(seg.text));
+                ++kept;
                 const std::wstring wide = utf8_to_wide(seg.text);
                 if (!wide.empty()) {
                     if (!last_prompt_.empty())
@@ -496,12 +609,20 @@ void CaptionWorker::thread_main() {
                     if (last_prompt_.size() > kPromptChars * 2)
                         last_prompt_ = last_prompt_.substr(last_prompt_.size() - kPromptChars);
                 }
+                CapDiag("event=SEG t0=%.3f t1=%.3f text=%s", t0, t1, seg.text.c_str());
             }
 
             const double advance = (std::max)(0.5, length - kOverlapSec);
             covered_until_ = start + advance;
             if (duration > 0.0 && covered_until_ > duration)
                 covered_until_ = duration;
+            const double lag_after = playhead_after - covered_until_;
+            // Realtime factor: asr_ms for `length` seconds of audio. >1.0 means slower than realtime.
+            const double rtf = (length > 0.01) ? ((asr_ms / 1000.0) / length) : 0.0;
+            CapDiag("event=JOB_DONE playhead=%.3f covered=%.3f lag=%.3f chunk_start=%.3f chunk_len=%.3f "
+                    "extract_ms=%.0f asr_ms=%.0f rtf=%.2f segs=%d kept=%d dropped=%d",
+                    playhead_after, covered_until_, lag_after, start, length, extract_ms, asr_ms, rtf,
+                    static_cast<int>(segments.size()), kept, dropped);
             status_ = CaptionStatus::Ready;
             status_text_.clear();
         }

@@ -1,9 +1,13 @@
 #include "whisper_runtime.hpp"
 
+#include <winhttp.h>
+
 #include <cstdio>
 #include <cstdlib>
 #include <string>
 #include <vector>
+
+#pragma comment(lib, "winhttp.lib")
 
 namespace {
 
@@ -42,9 +46,22 @@ std::wstring Quote(const std::wstring& arg) {
     return out;
 }
 
-void AppendWhisperCliCandidates(std::vector<std::wstring>& out, const std::wstring& root) {
+void AppendOpenWhisperCliCandidates(std::vector<std::wstring>& out, const std::wstring& root) {
     if (root.empty())
         return;
+    // Official ggml-org/whisper.cpp Windows builds (MIT).
+    out.push_back(root + L"\\whisper-cli.exe");
+    out.push_back(root + L"\\main.exe");
+    out.push_back(root + L"\\whisper.exe");
+    out.push_back(root + L"\\Release\\whisper-cli.exe");
+    out.push_back(root + L"\\Release\\main.exe");
+    out.push_back(root + L"\\bin\\whisper-cli.exe");
+}
+
+void AppendPotPlayerWhisperCliCandidates(std::vector<std::wstring>& out, const std::wstring& root) {
+    if (root.empty())
+        return;
+    // Proprietary PotPlayer Module\\Whisper — optional local fallback only.
     out.push_back(root + L"\\Vulkan\\main64.exe");
     out.push_back(root + L"\\CPU\\main64.exe");
     out.push_back(root + L"\\main64.exe");
@@ -88,22 +105,48 @@ std::wstring PotPlayerInstallRoot() {
     return {};
 }
 
-std::wstring FindCli() {
+void AppendWhisperRoots(std::vector<std::wstring>& roots) {
     const std::wstring root = ExeDirectory();
-    std::vector<std::wstring> candidates;
-    AppendWhisperCliCandidates(candidates, root + L"\\potplayer-whisper");
-    AppendWhisperCliCandidates(candidates, root + L"\\..\\..\\third_party\\potplayer-whisper");
-
+    roots.push_back(root + L"\\whisper");
+    roots.push_back(root);
+    roots.push_back(root + L"\\..\\..\\third_party\\whisper-win");
     wchar_t local[MAX_PATH];
     if (GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH) > 0)
-        AppendWhisperCliCandidates(candidates, std::wstring(local) + L"\\upPlayer\\potplayer-whisper");
+        roots.push_back(std::wstring(local) + L"\\upPlayer\\whisper");
+}
 
+std::wstring FindCli() {
+    std::vector<std::wstring> candidates;
+    std::vector<std::wstring> roots;
+    AppendWhisperRoots(roots);
+    for (const std::wstring& r : roots)
+        AppendOpenWhisperCliCandidates(candidates, r);
+
+    // Optional PotPlayer fallback (proprietary; not shipped by upPlayer).
+    const std::wstring root = ExeDirectory();
+    AppendPotPlayerWhisperCliCandidates(candidates, root + L"\\potplayer-whisper");
+    AppendPotPlayerWhisperCliCandidates(candidates, root + L"\\..\\..\\third_party\\potplayer-whisper");
+    wchar_t local[MAX_PATH];
+    if (GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH) > 0)
+        AppendPotPlayerWhisperCliCandidates(candidates,
+                                            std::wstring(local) + L"\\upPlayer\\potplayer-whisper");
     const std::wstring pot = PotPlayerInstallRoot();
     if (!pot.empty())
-        AppendWhisperCliCandidates(candidates, pot + L"\\Module\\Whisper");
+        AppendPotPlayerWhisperCliCandidates(candidates, pot + L"\\Module\\Whisper");
 
     for (const std::wstring& c : candidates) {
         const std::wstring full = Resolve(c);
+        if (!full.empty())
+            return full;
+    }
+    return {};
+}
+
+std::wstring FindServer() {
+    std::vector<std::wstring> roots;
+    AppendWhisperRoots(roots);
+    for (const std::wstring& r : roots) {
+        const std::wstring full = Resolve(r + L"\\whisper-server.exe");
         if (!full.empty())
             return full;
     }
@@ -133,16 +176,20 @@ std::wstring FirstExistingModel(const std::vector<std::wstring>& dirs) {
 std::wstring FindModel() {
     std::vector<std::wstring> dirs;
     const std::wstring root = ExeDirectory();
+    dirs.push_back(root + L"\\whisper\\models");
     dirs.push_back(root + L"\\models");
+    dirs.push_back(root + L"\\..\\..\\third_party\\whisper-win\\models");
     dirs.push_back(root + L"\\potplayer-whisper\\Model");
+
+    wchar_t local[MAX_PATH];
+    if (GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH) > 0) {
+        dirs.push_back(std::wstring(local) + L"\\upPlayer\\whisper\\models");
+        dirs.push_back(std::wstring(local) + L"\\upPlayer\\models");
+    }
 
     wchar_t appdata[MAX_PATH];
     if (GetEnvironmentVariableW(L"APPDATA", appdata, MAX_PATH) > 0)
         dirs.push_back(std::wstring(appdata) + L"\\PotPlayerMini64\\Model");
-
-    wchar_t local[MAX_PATH];
-    if (GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH) > 0)
-        dirs.push_back(std::wstring(local) + L"\\upPlayer\\models");
 
     const std::wstring pot = PotPlayerInstallRoot();
     if (!pot.empty())
@@ -306,6 +353,211 @@ bool ParseWhisperJson(const std::string& json, std::vector<WhisperSegment>& out)
     return !out.empty();
 }
 
+// whisper-server verbose_json: segments[{text,start,end}, ...] with times in seconds.
+bool ParseVerboseJson(const std::string& json, std::vector<WhisperSegment>& out) {
+    out.clear();
+    const size_t segments = json.find("\"segments\"");
+    if (segments == std::string::npos)
+        return false;
+    size_t pos = segments;
+    while (true) {
+        const size_t text_key = json.find("\"text\"", pos);
+        if (text_key == std::string::npos)
+            break;
+        // Stop once we leave the segments array (detected_language follows).
+        const size_t detected = json.find("\"detected_language\"", pos);
+        if (detected != std::string::npos && detected < text_key)
+            break;
+        const size_t text_colon = json.find(':', text_key);
+        std::string text;
+        size_t after_text = 0;
+        if (!ParseJsonString(json, text_colon, &text, &after_text))
+            break;
+        const size_t start_key = json.find("\"start\"", after_text);
+        const size_t start_colon =
+            start_key == std::string::npos ? std::string::npos : json.find(':', start_key);
+        double start = -1.0;
+        size_t after_start = 0;
+        if (!ParseJsonNumber(json, start_colon, &start, &after_start))
+            break;
+        const size_t end_key = json.find("\"end\"", after_start);
+        const size_t end_colon = end_key == std::string::npos ? std::string::npos : json.find(':', end_key);
+        double end = -1.0;
+        size_t after_end = 0;
+        if (!ParseJsonNumber(json, end_colon, &end, &after_end))
+            break;
+        TrimAscii(text);
+        // Drop newline-only / whitespace leftovers from server.
+        while (!text.empty() && (text.back() == '\n' || text.back() == '\r'))
+            text.pop_back();
+        WhisperSegment seg;
+        seg.t0 = start;
+        seg.t1 = end;
+        seg.text = std::move(text);
+        if (seg.t0 >= 0.0 && seg.t1 > seg.t0 && !seg.text.empty())
+            out.push_back(std::move(seg));
+        pos = after_end + 1;
+    }
+    return !out.empty();
+}
+
+bool ParseAnyWhisperJson(const std::string& json, std::vector<WhisperSegment>& out) {
+    if (ParseVerboseJson(json, out))
+        return true;
+    return ParseWhisperJson(json, out);
+}
+
+void CaptureDetectedLanguage(const std::string& json, std::string* out_lang) {
+    if (!out_lang)
+        return;
+    size_t key = json.find("\"detected_language\"");
+    if (key == std::string::npos)
+        key = json.find("\"language\"");
+    if (key == std::string::npos)
+        return;
+    const size_t colon = json.find(':', key);
+    std::string detected;
+    size_t end = 0;
+    if (!ParseJsonString(json, colon, &detected, &end) || detected.empty() || detected == "auto")
+        return;
+    for (char& c : detected) {
+        if (c >= 'A' && c <= 'Z')
+            c = static_cast<char>(c - 'A' + 'a');
+    }
+    // Server may return "chinese" — map common names to whisper codes.
+    if (detected == "chinese")
+        detected = "zh";
+    else if (detected == "english")
+        detected = "en";
+    else if (detected == "japanese")
+        detected = "ja";
+    else if (detected == "korean")
+        detected = "ko";
+    *out_lang = detected;
+}
+
+std::string MultipartField(const std::string& boundary, const std::string& name, const std::string& value) {
+    std::string part;
+    part += "--" + boundary + "\r\n";
+    part += "Content-Disposition: form-data; name=\"" + name + "\"\r\n\r\n";
+    part += value;
+    part += "\r\n";
+    return part;
+}
+
+bool HttpPostMultipart(int port, const std::string& path, const std::string& body, const std::string& boundary,
+                       std::string* response, std::wstring* error) {
+    if (!response)
+        return false;
+    response->clear();
+    HINTERNET session = WinHttpOpen(L"upPlayer/whisper", WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME,
+                                    WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!session) {
+        if (error)
+            *error = L"WinHTTP open failed";
+        return false;
+    }
+    HINTERNET connect = WinHttpConnect(session, L"127.0.0.1", static_cast<INTERNET_PORT>(port), 0);
+    if (!connect) {
+        WinHttpCloseHandle(session);
+        if (error)
+            *error = L"WinHTTP connect failed";
+        return false;
+    }
+    const int wlen = MultiByteToWideChar(CP_UTF8, 0, path.data(), static_cast<int>(path.size()), nullptr, 0);
+    std::wstring wpath(static_cast<size_t>(wlen), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, path.data(), static_cast<int>(path.size()), wpath.data(), wlen);
+    HINTERNET request =
+        WinHttpOpenRequest(connect, L"POST", wpath.c_str(), nullptr, WINHTTP_NO_REFERER,
+                             WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
+    if (!request) {
+        WinHttpCloseHandle(connect);
+        WinHttpCloseHandle(session);
+        if (error)
+            *error = L"WinHTTP request failed";
+        return false;
+    }
+    // Long ASR jobs (Intel UHD stalls) need generous timeouts.
+    WinHttpSetTimeouts(request, 5000, 5000, 30000, 120000);
+
+    const std::wstring ctype =
+        L"Content-Type: multipart/form-data; boundary=" + std::wstring(boundary.begin(), boundary.end());
+    BOOL ok = WinHttpSendRequest(request, ctype.c_str(), static_cast<DWORD>(-1),
+                                 (LPVOID)body.data(), static_cast<DWORD>(body.size()),
+                                 static_cast<DWORD>(body.size()), 0);
+    if (ok)
+        ok = WinHttpReceiveResponse(request, nullptr);
+    if (!ok) {
+        WinHttpCloseHandle(request);
+        WinHttpCloseHandle(connect);
+        WinHttpCloseHandle(session);
+        if (error)
+            *error = L"Whisper server request failed";
+        return false;
+    }
+    DWORD status = 0;
+    DWORD status_size = sizeof(status);
+    WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                        WINHTTP_HEADER_NAME_BY_INDEX, &status, &status_size, WINHTTP_NO_HEADER_INDEX);
+    std::string data;
+    for (;;) {
+        DWORD avail = 0;
+        if (!WinHttpQueryDataAvailable(request, &avail) || avail == 0)
+            break;
+        const size_t off = data.size();
+        data.resize(off + avail);
+        DWORD read = 0;
+        if (!WinHttpReadData(request, data.data() + off, avail, &read)) {
+            data.resize(off);
+            break;
+        }
+        data.resize(off + read);
+    }
+    WinHttpCloseHandle(request);
+    WinHttpCloseHandle(connect);
+    WinHttpCloseHandle(session);
+    *response = std::move(data);
+    if (status < 200 || status >= 300) {
+        if (error)
+            *error = L"Whisper server HTTP " + std::to_wstring(status);
+        return false;
+    }
+    return true;
+}
+
+bool HttpGetOk(int port, const wchar_t* path) {
+    HINTERNET session = WinHttpOpen(L"upPlayer/whisper", WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME,
+                                    WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!session)
+        return false;
+    HINTERNET connect = WinHttpConnect(session, L"127.0.0.1", static_cast<INTERNET_PORT>(port), 0);
+    if (!connect) {
+        WinHttpCloseHandle(session);
+        return false;
+    }
+    HINTERNET request = WinHttpOpenRequest(connect, L"GET", path, nullptr, WINHTTP_NO_REFERER,
+                                             WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
+    if (!request) {
+        WinHttpCloseHandle(connect);
+        WinHttpCloseHandle(session);
+        return false;
+    }
+    WinHttpSetTimeouts(request, 1000, 1000, 1000, 2000);
+    BOOL ok = WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
+    if (ok)
+        ok = WinHttpReceiveResponse(request, nullptr);
+    DWORD status = 0;
+    if (ok) {
+        DWORD status_size = sizeof(status);
+        WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                            WINHTTP_HEADER_NAME_BY_INDEX, &status, &status_size, WINHTTP_NO_HEADER_INDEX);
+    }
+    WinHttpCloseHandle(request);
+    WinHttpCloseHandle(connect);
+    WinHttpCloseHandle(session);
+    return ok && status >= 200 && status < 500;
+}
+
 std::string ReadFileUtf8(const std::wstring& path) {
     HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
                               OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -328,8 +580,13 @@ std::string ReadFileUtf8(const std::wstring& path) {
 
 }  // namespace
 
+WhisperRuntime::~WhisperRuntime() {
+    cancel();
+    stop_server();
+}
+
 bool WhisperRuntime::available() const {
-    return !cli_path().empty();
+    return !cli_path().empty() || !FindServer().empty();
 }
 
 std::wstring WhisperRuntime::cli_path() const {
@@ -341,16 +598,43 @@ std::wstring WhisperRuntime::model_path() const {
 }
 
 std::wstring WhisperRuntime::last_error() const {
+    std::lock_guard<std::mutex> lock(mu_);
     return last_error_;
 }
 
 std::wstring WhisperRuntime::backend_label() const {
+    const std::wstring server = FindServer();
     const std::wstring cli = cli_path();
-    if (cli.find(L"\\Vulkan\\") != std::wstring::npos)
-        return L"PotPlayer Whisper (Vulkan)";
-    if (cli.find(L"\\CPU\\") != std::wstring::npos)
-        return L"PotPlayer Whisper (CPU)";
-    return cli.empty() ? L"Whisper CLI not found" : L"PotPlayer Whisper";
+    const std::wstring path = !server.empty() ? server : cli;
+    if (path.empty())
+        return L"Whisper CLI not found";
+
+    std::wstring label;
+    const bool pot = path.find(L"potplayer-whisper") != std::wstring::npos ||
+                     path.find(L"\\Module\\Whisper") != std::wstring::npos ||
+                     path.find(L"/Module/Whisper") != std::wstring::npos ||
+                     path.find(L"main64.exe") != std::wstring::npos;
+    if (pot) {
+        if (path.find(L"\\Vulkan\\") != std::wstring::npos)
+            label = L"PotPlayer Whisper (Vulkan)";
+        else if (path.find(L"\\CPU\\") != std::wstring::npos)
+            label = L"PotPlayer Whisper (CPU)";
+        else
+            label = L"PotPlayer Whisper";
+    } else {
+        const auto slash = path.find_last_of(L"\\/");
+        bool vulkan = false;
+        if (slash != std::wstring::npos) {
+            const std::wstring vulkan_dll = path.substr(0, slash + 1) + L"ggml-vulkan.dll";
+            vulkan = FileExists(vulkan_dll);
+        }
+        label = vulkan ? L"whisper.cpp (Vulkan)" : L"whisper.cpp (CPU)";
+        if (!server.empty()) {
+            const bool warm = server_healthy();
+            label += warm ? L" server" : L" +server";
+        }
+    }
+    return label;
 }
 
 bool WhisperRuntime::ensure_model(const ProgressFn& progress) {
@@ -358,26 +642,179 @@ bool WhisperRuntime::ensure_model(const ProgressFn& progress) {
     if (!model_path().empty())
         return true;
     last_error_ =
-        L"No Whisper model. Install one in PotPlayer (Preferences → Speech) "
-        L"or place ggml-base.bin in %LOCALAPPDATA%\\upPlayer\\models\\";
+        L"No Whisper model. Run scripts\\fetch-whisper-deps.ps1 "
+        L"or place ggml-base.bin under whisper\\models\\ next to upPlayer.";
     if (progress)
         progress(last_error_);
     return false;
 }
 
 std::string WhisperRuntime::last_detected_language() const {
+    std::lock_guard<std::mutex> lock(mu_);
     return last_detected_language_;
 }
 
-bool WhisperRuntime::transcribe(const std::wstring& wav_path, const std::string& prompt,
-                                std::vector<WhisperSegment>& out, std::wstring* error,
-                                const std::string& language) {
-    out.clear();
-    last_error_.clear();
+bool WhisperRuntime::server_healthy() const {
+    if (!server_process_ || server_port_ <= 0)
+        return false;
+    DWORD code = STILL_ACTIVE;
+    if (!GetExitCodeProcess(server_process_, &code) || code != STILL_ACTIVE)
+        return false;
+    return HttpGetOk(server_port_, L"/");
+}
+
+void WhisperRuntime::stop_server() {
+    HANDLE proc = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        proc = server_process_;
+        server_process_ = nullptr;
+        server_pid_ = 0;
+        server_port_ = 0;
+    }
+    if (!proc)
+        return;
+    TerminateProcess(proc, 1);
+    WaitForSingleObject(proc, 3000);
+    CloseHandle(proc);
+}
+
+bool WhisperRuntime::ensure_server() {
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (server_failed_)
+            return false;
+        if (server_process_ && server_healthy())
+            return true;
+    }
+    // Restart if the previous handle is dead.
+    stop_server();
+
+    const std::wstring server = FindServer();
+    const std::wstring model = model_path();
+    if (server.empty() || model.empty())
+        return false;
+
+    SYSTEM_INFO sysinfo{};
+    GetSystemInfo(&sysinfo);
+    int threads = static_cast<int>(sysinfo.dwNumberOfProcessors);
+    if (threads < 2)
+        threads = 2;
+    if (threads > 16)
+        threads = 16;
+
+    const int port = 18765 + static_cast<int>(GetCurrentProcessId() % 2000);
+    std::wstring cmd = Quote(server) + L" -m " + Quote(model) + L" -l auto -t " + std::to_wstring(threads) +
+                       L" -bs 1 --host 127.0.0.1 --port " + std::to_wstring(port);
+
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    PROCESS_INFORMATION pi{};
+    std::wstring mutable_cmd = cmd;
+    std::wstring cwd = ExeDirectory();
+    const auto slash = server.find_last_of(L"\\/");
+    if (slash != std::wstring::npos)
+        cwd = server.substr(0, slash);
+
+    if (!CreateProcessW(nullptr, mutable_cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr,
+                        cwd.empty() ? nullptr : cwd.c_str(), &si, &pi)) {
+        std::lock_guard<std::mutex> lock(mu_);
+        server_failed_ = true;
+        last_error_ = L"Failed to start whisper-server";
+        return false;
+    }
+    CloseHandle(pi.hThread);
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        server_process_ = pi.hProcess;
+        server_pid_ = pi.dwProcessId;
+        server_port_ = port;
+    }
+
+    // Model load on Vulkan can take several seconds.
+    for (int i = 0; i < 60; ++i) {
+        if (server_healthy())
+            return true;
+        DWORD code = STILL_ACTIVE;
+        if (!GetExitCodeProcess(pi.hProcess, &code) || code != STILL_ACTIVE)
+            break;
+        Sleep(250);
+    }
+
+    stop_server();
+    std::lock_guard<std::mutex> lock(mu_);
+    server_failed_ = true;
+    last_error_ = L"whisper-server failed to become ready";
+    return false;
+}
+
+bool WhisperRuntime::transcribe_via_server(const std::wstring& wav_path, const std::string& prompt,
+                                           std::vector<WhisperSegment>& out, std::wstring* error,
+                                           const std::string& language) {
+    int port = 0;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        port = server_port_;
+    }
+    if (port <= 0)
+        return false;
+
+    const std::string wav = ReadFileUtf8(wav_path);
+    if (wav.empty()) {
+        if (error)
+            *error = L"Cannot read WAV for whisper-server";
+        return false;
+    }
+
+    std::string lang = language.empty() ? "auto" : language;
+    for (char& c : lang) {
+        if (c >= 'A' && c <= 'Z')
+            c = static_cast<char>(c - 'A' + 'a');
+    }
+
+    const std::string boundary = "----upPlayerWhisper7e3c9a";
+    std::string body;
+    body.reserve(wav.size() + 512);
+    body += "--" + boundary + "\r\n";
+    body += "Content-Disposition: form-data; name=\"file\"; filename=\"chunk.wav\"\r\n";
+    body += "Content-Type: audio/wav\r\n\r\n";
+    body += wav;
+    body += "\r\n";
+    body += MultipartField(boundary, "response_format", "verbose_json");
+    body += MultipartField(boundary, "temperature", "0.0");
+    body += MultipartField(boundary, "temperature_inc", "0.0");
+    if (!lang.empty())
+        body += MultipartField(boundary, "language", lang);
+    if (!prompt.empty())
+        body += MultipartField(boundary, "prompt", prompt);
+    body += "--" + boundary + "--\r\n";
+
+    std::string response;
+    std::wstring http_error;
+    if (!HttpPostMultipart(port, "/inference", body, boundary, &response, &http_error)) {
+        if (error)
+            *error = http_error.empty() ? L"whisper-server inference failed" : http_error;
+        return false;
+    }
+
+    CaptureDetectedLanguage(response, &last_detected_language_);
+    if (!ParseAnyWhisperJson(response, out)) {
+        // Empty speech is OK.
+        return true;
+    }
+    return true;
+}
+
+bool WhisperRuntime::transcribe_via_cli(const std::wstring& wav_path, const std::string& prompt,
+                                        std::vector<WhisperSegment>& out, std::wstring* error,
+                                        const std::string& language) {
     const std::wstring cli = cli_path();
     const std::wstring model = model_path();
     if (cli.empty()) {
-        last_error_ = L"PotPlayer Whisper CLI missing (third_party/potplayer-whisper)";
+        last_error_ = L"Whisper CLI missing — run scripts\\fetch-whisper-deps.ps1 "
+                      L"(or install open whisper.cpp next to upPlayer\\whisper\\)";
         if (error)
             *error = last_error_;
         return false;
@@ -406,8 +843,8 @@ bool WhisperRuntime::transcribe(const std::wstring& wav_path, const std::string&
     int threads = static_cast<int>(sysinfo.dwNumberOfProcessors);
     if (threads < 2)
         threads = 2;
-    if (threads > 8)
-        threads = 8;
+    if (threads > 16)
+        threads = 16;
 
     std::string lang = language.empty() ? "auto" : language;
     for (char& c : lang) {
@@ -417,7 +854,7 @@ bool WhisperRuntime::transcribe(const std::wstring& wav_path, const std::string&
 
     std::wstring cmd = Quote(cli) + L" -m " + Quote(model) + L" -f " + Quote(wav_path) + L" -l ";
     cmd += std::wstring(lang.begin(), lang.end());
-    cmd += L" -t " + std::to_wstring(threads) + L" -oj -of " + Quote(out_base) + L" -np";
+    cmd += L" -t " + std::to_wstring(threads) + L" -bs 1 -oj -of " + Quote(out_base) + L" -np";
     if (!prompt.empty()) {
         const int needed =
             MultiByteToWideChar(CP_UTF8, 0, prompt.data(), static_cast<int>(prompt.size()), nullptr, 0);
@@ -443,7 +880,7 @@ bool WhisperRuntime::transcribe(const std::wstring& wav_path, const std::string&
 
     if (!CreateProcessW(nullptr, mutable_cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr,
                         cwd.empty() ? nullptr : cwd.c_str(), &si, &pi)) {
-        last_error_ = L"Failed to start PotPlayer Whisper";
+        last_error_ = L"Failed to start Whisper CLI";
         if (error)
             *error = last_error_;
         return false;
@@ -465,23 +902,8 @@ bool WhisperRuntime::transcribe(const std::wstring& wav_path, const std::string&
         return false;
     }
 
-    {
-        const size_t key = json.find("\"language\"");
-        if (key != std::string::npos) {
-            const size_t colon = json.find(':', key);
-            std::string detected;
-            size_t end = 0;
-            if (ParseJsonString(json, colon, &detected, &end) && !detected.empty() && detected != "auto") {
-                for (char& c : detected) {
-                    if (c >= 'A' && c <= 'Z')
-                        c = static_cast<char>(c - 'A' + 'a');
-                }
-                last_detected_language_ = detected;
-            }
-        }
-    }
-
-    if (!ParseWhisperJson(json, out)) {
+    CaptureDetectedLanguage(json, &last_detected_language_);
+    if (!ParseAnyWhisperJson(json, out)) {
         if (exit_code != 0) {
             last_error_ = L"Whisper failed";
             if (error)
@@ -491,6 +913,36 @@ bool WhisperRuntime::transcribe(const std::wstring& wav_path, const std::string&
         return true;
     }
     return true;
+}
+
+bool WhisperRuntime::transcribe(const std::wstring& wav_path, const std::string& prompt,
+                                std::vector<WhisperSegment>& out, std::wstring* error,
+                                const std::string& language) {
+    out.clear();
+    last_error_.clear();
+    if (model_path().empty()) {
+        last_error_ = L"Whisper model missing";
+        if (error)
+            *error = last_error_;
+        return false;
+    }
+
+    if (ensure_server()) {
+        std::wstring server_error;
+        if (transcribe_via_server(wav_path, prompt, out, &server_error, language))
+            return true;
+        // One transient failure: restart once, then fall back to CLI.
+        stop_server();
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            server_failed_ = false;
+        }
+        if (ensure_server() && transcribe_via_server(wav_path, prompt, out, &server_error, language))
+            return true;
+        last_error_ = server_error.empty() ? L"whisper-server failed; falling back to CLI" : server_error;
+    }
+
+    return transcribe_via_cli(wav_path, prompt, out, error, language);
 }
 
 void WhisperRuntime::cancel() {

@@ -42,7 +42,7 @@ elseif(MINGW)
   target_link_options(upPlayer PRIVATE -municode)
 endif()
 
-target_link_libraries(upPlayer PRIVATE comctl32 comdlg32 shell32 dwmapi imm32 windowscodecs ole32)
+target_link_libraries(upPlayer PRIVATE comctl32 comdlg32 shell32 dwmapi imm32 windowscodecs ole32 winhttp)
 
 set(ONNXRUNTIME_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/onnxruntime")
 if(EXISTS "${ONNXRUNTIME_DIR}/include/onnxruntime_cxx_api.h" AND

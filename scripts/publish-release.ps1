@@ -61,7 +61,7 @@ $notesBody
 ### Install
 Run ``upPlayer-Setup-x64-$Version.exe`` (admin / UAC).
 
-Auto captions use PotPlayer Whisper when shipped with the build or found next to the app / from a PotPlayer install (see NOTICE).
+Auto captions use MIT whisper.cpp (`whisper\` next to the app) when packaged; see NOTICE.
 "@
 
 if (-not $SkipPush) {

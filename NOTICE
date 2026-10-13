@@ -17,29 +17,32 @@ If you redistribute builds that include mpv binaries or libmpv, you must comply
 with the applicable mpv license (including source offer obligations where GPL
 applies).
 
-PotPlayer Whisper module
-------------------------
-Auto-caption support can invoke binaries copied from a local PotPlayer install
-into `third_party/potplayer-whisper` (from
-`C:\Program Files\DAUM\PotPlayer\Module\Whisper`).
+whisper.cpp (preferred captions backend)
+----------------------------------------
+Auto captions prefer the MIT-licensed [whisper.cpp](https://github.com/ggml-org/whisper.cpp)
+Windows CLI (`whisper-cli.exe` / `main.exe`) under `whisper\` next to upPlayer, fetched via
+`scripts/fetch-whisper-deps.ps1` into `third_party/whisper-win/` (gitignored binaries).
 
-Those binaries and related files are proprietary to PotPlayer / Kakao Corp
+If you redistribute those binaries, keep whisper.cpp’s MIT attribution / LICENSE with the
+build (see upstream release package).
+
+Whisper models
+--------------
+Model files such as `ggml-base.bin` are separate downloads (e.g. Hugging Face
+`ggerganov/whisper.cpp`). They are not covered by the upPlayer MIT License; follow the
+model provider’s terms.
+
+PotPlayer Whisper module (optional fallback only)
+-------------------------------------------------
+If no open whisper.cpp CLI is found, upPlayer may fall back to a local PotPlayer
+`Module\Whisper` install. Those binaries are proprietary to PotPlayer / Kakao Corp
 (or its licensors). They are:
 
 - not part of the upPlayer MIT-licensed codebase
 - not redistributed by this repository (gitignored)
-- for local use only if your PotPlayer license allows copying them onto the same
-  machine for personal use
+- not shipped in upPlayer releases
 
-Do not publish or ship PotPlayer Whisper binaries with upPlayer releases unless
-you have permission from the rights holder. Prefer documenting that users copy
-the module from their own PotPlayer installation.
-
-Whisper models
---------------
-Model files such as `ggml-*.bin` are separate downloads (for example from
-PotPlayer's model folder or other Whisper model sources). They are not covered
-by the upPlayer MIT License; follow the license of the model provider.
+Do not publish PotPlayer Whisper binaries unless you have permission from the rights holder.
 
 Ultralytics YOLO26 + ONNX Runtime
 ---------------------------------

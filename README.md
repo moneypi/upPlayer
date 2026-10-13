@@ -4,7 +4,7 @@ Lightweight Windows video player front-end for [mpv](https://mpv.io/). Opens loc
 
 **Version:** 0.5.1 (right-click → **About upPlayer…**) — see [CHANGELOG](CHANGELOG.md)
 
-**License:** upPlayer source is [MIT](LICENSE). Third-party components (mpv, PotPlayer Whisper binaries, models) have their own terms — see [NOTICE](NOTICE).
+**License:** upPlayer source is [MIT](LICENSE). Third-party components (mpv, whisper.cpp, models) have their own terms — see [NOTICE](NOTICE).
 
 ## Requirements
 
@@ -79,7 +79,7 @@ Publish a GitHub release (tag + setup asset):
 | **m** | Mute / unmute |
 | **Mouse wheel** | Volume up / down (over video or seek bar) |
 | **s** | Take snapshot (saved to Desktop) |
-| **a** | Toggle live auto captions (PotPlayer Whisper Vulkan/CPU) |
+| **a** | Toggle live auto captions (whisper.cpp) |
 | **y** | Toggle YOLO26 detection (skips busy frames; never stalls play) |
 | **t** | LightFC track: arm → click target on video (skip busy frames) |
 | **z** | Mark clip In (A); pauses; selects In for `,` / `.` nudge |
@@ -116,13 +116,12 @@ Press **t** to arm, then click the object on the video. LightFC tracks with a cy
 
 ### Auto captions
 
-Press **a** to toggle live captions. For local use, copy PotPlayer’s Whisper module into `third_party/potplayer-whisper` (Vulkan `main64.exe`, CPU fallback). Those binaries are **not** MIT-licensed and are **not** shipped in this repo — see [NOTICE](NOTICE). Models are shared with PotPlayer (`%APPDATA%\PotPlayerMini64\Model\`) or `%LOCALAPPDATA%\upPlayer\models\ggml-base.bin`.
+Press **a** to toggle live captions. Captions use MIT [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (not PotPlayer libraries):
 
 ```powershell
-Copy-Item "C:\Program Files\DAUM\PotPlayer\Module\Whisper\*" `
-  "third_party\potplayer-whisper\" -Recurse -Force
+.\scripts\fetch-whisper-deps.ps1   # Vulkan whisper-cli + ggml-base.bin → third_party\whisper-win\
 ```
 
-Requires `mpv.exe` on `PATH` (or next to `upPlayer.exe`) to extract audio chunks.
+Requires `mpv.exe` on `PATH` (or next to `upPlayer.exe`) to extract audio chunks. See [NOTICE](NOTICE).
 
 When speed is not 1x, the window title shows the current rate (for example `[1.5x]`), and a short on-screen label appears after changing speed.

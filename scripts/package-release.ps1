@@ -152,22 +152,31 @@ foreach ($script in @("register-assoc.ps1", "install-payload.ps1")) {
     }
 }
 
-# PotPlayer Whisper is proprietary — only include a local copy if the developer
-# already placed it next to the built exe or under third_party (gitignored).
-# Do not publish those binaries unless you have redistrib rights; see NOTICE.
-$whisperCandidates = @(
-    (Join-Path (Split-Path $Exe -Parent) "potplayer-whisper"),
-    (Join-Path $Root "third_party\potplayer-whisper")
+# MIT whisper.cpp CLI + model (preferred). See scripts\fetch-whisper-deps.ps1.
+$openWhisperCandidates = @(
+    (Join-Path (Split-Path $Exe -Parent) "whisper"),
+    (Join-Path $Root "third_party\whisper-win")
 )
-$whisperSrc = $whisperCandidates | Where-Object {
-    (Test-Path (Join-Path $_ "Vulkan\main64.exe")) -or (Test-Path (Join-Path $_ "CPU\main64.exe"))
+$openWhisper = $openWhisperCandidates | Where-Object {
+    (Test-Path (Join-Path $_ "whisper-cli.exe")) -or
+    (Test-Path (Join-Path $_ "main.exe")) -or
+    (Test-Path (Join-Path $_ "whisper.exe"))
 } | Select-Object -First 1
-if ($whisperSrc) {
-    Write-Host "Including local PotPlayer Whisper from $whisperSrc"
-    Copy-Item $whisperSrc (Join-Path $PkgDir "potplayer-whisper") -Recurse -Force
+if ($openWhisper) {
+    $dest = Join-Path $PkgDir "whisper"
+    New-Item -ItemType Directory -Force -Path $dest | Out-Null
+    Get-ChildItem $openWhisper -File | Copy-Item -Destination $dest -Force
+    $modelsSrc = Join-Path $openWhisper "models"
+    if (Test-Path $modelsSrc) {
+        New-Item -ItemType Directory -Force -Path (Join-Path $dest "models") | Out-Null
+        Copy-Item (Join-Path $modelsSrc "*") (Join-Path $dest "models") -Force
+    }
+    Write-Host "Including open whisper.cpp from $openWhisper"
 } else {
-    Write-Host "PotPlayer Whisper not found next to build; captions need a local Module\Whisper copy (see README)."
+    Write-Host "Open whisper.cpp not found; run scripts\fetch-whisper-deps.ps1 for caption support."
 }
+
+# PotPlayer Whisper is proprietary — never auto-ship. Optional local-only leftover is ignored.
 
 # YOLO26 (optional): onnx next to build + ONNX Runtime DLLs
 $yoloOnnxCandidates = @(
