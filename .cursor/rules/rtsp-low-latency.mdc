@@ -1,0 +1,20 @@
+---
+description: RTSP low latency is upPlayer's top product priority
+alwaysApply: true
+---
+
+# RTSP low latency (highest priority)
+
+Low-latency RTSP/live playback is the most important feature of upPlayer. Prefer it over convenience, overlays, or secondary UX when they conflict.
+
+## Requirements
+
+- Match or beat CLI `mpv --profile=low-latency --untimed <rtsp>` end-to-end latency.
+- Live flags that affect demuxer/lavf/RTSP must be on the **mpv process command line**. Applying `low-latency` / `untimed` over IPC after lavf opens the socket is too late and can leave multi-second buffering.
+- Network URLs (`rtsp://`, `rtsps://`, `rtmp://`, etc.) should enter live mode automatically (CLI/drag-drop/open).
+- Never ship `demuxer-lavf-o` with colon-separated keys; lavf options are **comma**-separated (`fflags=+nobuffer+flush_packets`). Colons break RTSP open.
+
+## When changing player code
+
+- Test real RTSP open + visible video, not only IPC property toggles.
+- Do not regress live restart/`prepare_network_latency` for the sake of unrelated features.

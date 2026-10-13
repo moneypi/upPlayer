@@ -45,6 +45,8 @@ public:
     void append(const std::wstring& target);
     bool set_low_latency(bool enabled);
     bool set_untimed(bool enabled);
+    // Re-apply latency knobs before a network load (always, not only on toggle).
+    bool prepare_network_latency(bool low_latency, bool untimed);
     void toggle_pause();
     void set_pause(bool paused);
     void stop_playback();
@@ -93,9 +95,12 @@ private:
     struct Api;
 
     bool start_libmpv(HWND video, std::wstring& error);
-    bool start_exe(HWND video, std::wstring& error);
+    // live_mode: CLI-equivalent --profile=low-latency --untimed (needed for RTSP; IPC apply is not enough).
+    bool start_exe(HWND video, std::wstring& error, bool live_mode);
+    bool restart_exe_live(bool live_mode);
     void fail_libmpv();
     void fail_exe();
+    void apply_live_properties_libmpv(bool live);
 
     bool exec(const std::vector<std::string>& args, std::wstring* error);
     void post(const std::vector<std::string>& args);
@@ -131,7 +136,9 @@ private:
     HMODULE dll_ = nullptr;
 
     HWND notify_hwnd_ = nullptr;
+    HWND video_hwnd_ = nullptr;
     std::atomic<uintptr_t> notify_{0};
+    std::atomic<bool> exe_live_mode_{false};
     std::atomic<bool> running_{false};
     std::atomic<bool> reader_run_{false};
     std::atomic<bool> low_latency_{false};

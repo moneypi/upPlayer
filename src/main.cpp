@@ -277,7 +277,7 @@ private:
                      int& vol_left, int& vol_right) const;
     void open_file();
     void open_url();
-    void open_target(const std::wstring& target);
+    void open_target(const std::wstring& target, bool auto_live_for_network = true);
     void show_context_menu(int screen_x, int screen_y);
     void resize_to_video_scale(double scale);
     void enter_fullscreen(bool stretch);
@@ -1248,14 +1248,14 @@ void App::open_url() {
                         reinterpret_cast<LPARAM>(&result)) != IDOK)
         return;
     player_.stop_playback();
-    player_.set_low_latency(result.low_latency);
-    player_.set_untimed(result.untimed);
-    open_target(result.url);
+    if (!player_.prepare_network_latency(result.low_latency, result.untimed))
+        update_title();
+    open_target(result.url, false);
     update_title();
     SetFocus(video_);
 }
 
-void App::open_target(const std::wstring& target) {
+void App::open_target(const std::wstring& target, bool auto_live_for_network) {
     clip_in_ = -1.0;
     clip_out_ = -1.0;
     clip_active_ = ClipMark::None;
@@ -1263,6 +1263,19 @@ void App::open_target(const std::wstring& target) {
     last_caption_time_ = -1.0;
     last_caption_osd_.clear();
     player_.clear_caption();
+    if (auto_live_for_network) {
+        std::wstring lower = target;
+        for (auto& ch : lower) {
+            if (ch >= L'A' && ch <= L'Z')
+                ch = static_cast<wchar_t>(ch - L'A' + L'a');
+        }
+        const bool network = lower.rfind(L"rtsp://", 0) == 0 || lower.rfind(L"rtsps://", 0) == 0 ||
+                             lower.rfind(L"http://", 0) == 0 || lower.rfind(L"https://", 0) == 0 ||
+                             lower.rfind(L"rtmp://", 0) == 0 || lower.rfind(L"rtp://", 0) == 0 ||
+                             lower.rfind(L"udp://", 0) == 0 || lower.rfind(L"tcp://", 0) == 0;
+        // CLI/drag-drop: restart mpv with real --profile=low-latency --untimed (IPC is not enough).
+        player_.prepare_network_latency(network, network);
+    }
     if (!player_.load(target))
         update_title();
     sync_captions_media();

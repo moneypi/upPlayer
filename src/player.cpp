@@ -364,6 +364,7 @@ bool Player::start(HWND video, HWND notify) {
     delete api_;
     api_ = nullptr;
     start_error_.clear();
+    video_hwnd_ = video;
     notify_hwnd_ = notify;
     notify_.store(reinterpret_cast<uintptr_t>(notify));
 
@@ -371,7 +372,7 @@ bool Player::start(HWND video, HWND notify) {
     std::wstring exe_error;
     if (start_libmpv(video, lib_error))
         return true;
-    if (start_exe(video, exe_error))
+    if (start_exe(video, exe_error, false))
         return true;
 
     start_error_ = L"无法启动播放内核。请把 libmpv-2.dll 放在程序旁边，或安装 mpv 并加入 PATH。";
@@ -550,7 +551,7 @@ void Player::fail_libmpv() {
     }
 }
 
-bool Player::start_exe(HWND video, std::wstring& error) {
+bool Player::start_exe(HWND video, std::wstring& error, bool live_mode) {
     // Prefer the mpv next to upPlayer.exe (installer bundle) over a random PATH hit.
     std::wstring mpv = ExeDirectory() + L"\\mpv.exe";
     if (GetFileAttributesW(mpv.c_str()) == INVALID_FILE_ATTRIBUTES)
@@ -561,15 +562,27 @@ bool Player::start_exe(HWND video, std::wstring& error) {
     }
 
     const DWORD pid = GetCurrentProcessId();
-    pipe_name_ = L"\\\\.\\pipe\\upplayer-" + std::to_wstring(pid);
+    pipe_name_ = L"\\\\.\\pipe\\upplayer-" + std::to_wstring(pid) + (live_mode ? L"-live" : L"");
     wchar_t temp[MAX_PATH];
     GetTempPathW(MAX_PATH, temp);
     log_path_ = std::wstring(temp) + L"upplayer-" + std::to_wstring(pid) + L".log";
 
     std::wstring cmd = QuoteArg(mpv);
     cmd += L" --no-config --no-terminal --idle=yes --keep-open=yes --force-window=no";
-    cmd += L" --hwdec=auto-safe --osc=yes --input-vo-keyboard=no --input-cursor=yes";
+    cmd += L" --input-vo-keyboard=no --input-cursor=yes";
     cmd += L" --screenshot-directory=~~desktop/ --screenshot-template=upPlayer-%F-%n --screenshot-format=jpg";
+    if (live_mode) {
+        // Same class of flags as: mpv --profile=low-latency --untimed <rtsp>
+        // Must be on the process command line — apply-profile over IPC is far too late for lavf/RTSP.
+        cmd += L" --profile=low-latency --untimed --cache=no --hwdec=no --osc=no";
+        cmd += L" --demuxer-readahead-secs=0 --demuxer-max-bytes=65536 --demuxer-max-back-bytes=65536";
+        cmd += L" --demuxer-lavf-probe-info=nostreams --demuxer-lavf-analyzeduration=0.1";
+        // lavf-o keys are comma-separated; colons are invalid and break RTSP open.
+        cmd += L" --demuxer-lavf-o=fflags=+nobuffer+flush_packets";
+        cmd += L" --vd-lavc-o=flags=+low_delay --video-sync=desync --framedrop=decoder+vo";
+    } else {
+        cmd += L" --hwdec=auto-safe --osc=yes";
+    }
     cmd += L" --wid=" + std::to_wstring(static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(video)));
     cmd += L" --input-ipc-server=" + QuoteArg(pipe_name_);
     cmd += L" --log-file=" + QuoteArg(log_path_);
@@ -632,8 +645,87 @@ bool Player::start_exe(HWND video, std::wstring& error) {
 
     running_.store(true);
     backend_exe_ = true;
-    backend_label_ = L"mpv.exe";
+    exe_live_mode_.store(live_mode);
+    backend_label_ = live_mode ? L"mpv.exe (live)" : L"mpv.exe";
     return true;
+}
+
+bool Player::restart_exe_live(bool live_mode) {
+    if (!video_hwnd_)
+        return false;
+    // Tear down current exe backend and respawn with/without live CLI flags.
+    const bool was_exe = backend_exe_;
+    if (!was_exe)
+        return false;
+    running_.store(false);
+    if (process_ && writer_run_.load())
+        write_line("{\"command\":[\"quit\"]}");
+    stop_io();
+    if (process_ && WaitForSingleObject(process_, 400) != WAIT_OBJECT_0)
+        TerminateProcess(process_, 0);
+    if (pipe_ != INVALID_HANDLE_VALUE) {
+        CloseHandle(pipe_);
+        pipe_ = INVALID_HANDLE_VALUE;
+    }
+    if (process_) {
+        WaitForSingleObject(process_, 1000);
+        CloseHandle(process_);
+        process_ = nullptr;
+    }
+    if (process_thread_) {
+        CloseHandle(process_thread_);
+        process_thread_ = nullptr;
+    }
+    if (job_) {
+        CloseHandle(job_);
+        job_ = nullptr;
+    }
+    backend_exe_ = false;
+    std::wstring error;
+    if (!start_exe(video_hwnd_, error, live_mode)) {
+        set_error(error.empty() ? L"无法重启 mpv 直播模式" : error);
+        // Best-effort fallback to normal mode so the UI is not stuck.
+        if (!start_exe(video_hwnd_, error, false))
+            return false;
+        return false;
+    }
+    return true;
+}
+
+void Player::apply_live_properties_libmpv(bool live) {
+    if (backend_exe_ || !ctx_ || !api_)
+        return;
+    auto set_str = [&](const char* name, const char* value) {
+        if (api_->set_property_string)
+            api_->set_property_string(static_cast<mpv_handle*>(ctx_), name, value);
+    };
+    if (live) {
+        exec({"apply-profile", "low-latency"}, nullptr);
+        int flag = 1;
+        api_->set_property(static_cast<mpv_handle*>(ctx_), "untimed", MPV_FORMAT_FLAG, &flag);
+        set_str("cache", "no");
+        set_str("hwdec", "no");
+        set_str("osc", "no");
+        set_str("demuxer-readahead-secs", "0");
+        set_str("demuxer-max-bytes", "65536");
+        set_str("demuxer-max-back-bytes", "65536");
+        set_str("demuxer-lavf-o", "fflags=+nobuffer+flush_packets");
+        set_str("vd-lavc-o", "flags=+low_delay");
+        set_str("video-sync", "desync");
+        set_str("framedrop", "decoder+vo");
+        profile_applied_.store(true);
+    } else {
+        if (profile_applied_.load())
+            exec({"apply-profile", "low-latency", "restore"}, nullptr);
+        int flag = 0;
+        api_->set_property(static_cast<mpv_handle*>(ctx_), "untimed", MPV_FORMAT_FLAG, &flag);
+        set_str("cache", "auto");
+        set_str("hwdec", "auto-safe");
+        set_str("osc", "yes");
+        set_str("video-sync", "audio");
+        set_str("framedrop", "vo");
+        profile_applied_.store(false);
+    }
 }
 
 void Player::fail_exe() {
@@ -871,27 +963,38 @@ void Player::load_utf8(const std::string& utf8, const std::wstring& display, boo
     post({"loadfile", utf8});
 }
 
+bool Player::prepare_network_latency(bool low_latency, bool untimed) {
+    if (!running_.load() && !video_hwnd_)
+        return false;
+
+    // Live RTSP needs process-level flags. IPC apply-profile after lavf opens the
+    // socket cannot undo a multi-second probe/jitter buffer — that is why CLI mpv
+    // felt ~10s ahead of upPlayer.
+    const bool want_live = low_latency && untimed;
+    if (backend_exe_ || (!ctx_ && video_hwnd_)) {
+        if (want_live != exe_live_mode_.load() || !running_.load()) {
+            if (!restart_exe_live(want_live))
+                return false;
+        }
+    } else {
+        apply_live_properties_libmpv(want_live);
+    }
+
+    low_latency_.store(low_latency);
+    untimed_.store(untimed);
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        state_.last_error.clear();
+    }
+    notify();
+    return true;
+}
+
 bool Player::set_low_latency(bool enabled) {
     if (!running_.load())
         return false;
-    if (enabled == low_latency_.load())
-        return true;
-
-    std::wstring error;
-    bool ok = true;
-    if (enabled)
-        ok = exec({"apply-profile", "low-latency"}, &error);
-    else if (profile_applied_.load())
-        ok = exec({"apply-profile", "low-latency", "restore"}, &error);
-    if (!ok) {
-        if (error.empty())
-            error = L"无法切换 low-latency";
-        set_error(error);
+    if (!prepare_network_latency(enabled, untimed_.load()))
         return false;
-    }
-
-    low_latency_.store(enabled);
-    profile_applied_.store(enabled);
 
     std::string path;
     std::wstring display;
@@ -900,12 +1003,10 @@ bool Player::set_low_latency(bool enabled) {
         std::lock_guard<std::mutex> lock(mu_);
         path = current_utf8_;
         display = current_display_;
-        state_.last_error.clear();
         if (state_.duration > 1.0 && state_.time_pos > 0.5 && state_.time_pos + 0.5 < state_.duration)
             seek = state_.time_pos;
         pending_seek_ = seek;
     }
-    notify();
     if (!path.empty())
         load_utf8(path, display.empty() ? Utf8ToWide(path) : display, true);
     return true;
@@ -914,44 +1015,7 @@ bool Player::set_low_latency(bool enabled) {
 bool Player::set_untimed(bool enabled) {
     if (!running_.load())
         return false;
-    if (enabled == untimed_.load())
-        return true;
-
-    std::wstring error;
-    bool ok = false;
-    if (!backend_exe_) {
-        int flag = enabled ? 1 : 0;
-        const int rc = api_->set_property(static_cast<mpv_handle*>(ctx_), "untimed", MPV_FORMAT_FLAG, &flag);
-        ok = rc >= 0;
-        if (!ok && api_->error_string)
-            error = Utf8ToWide(api_->error_string(rc));
-    } else {
-        const int id = next_id_++;
-        const std::string json = std::string("{\"command\":[\"set_property\",\"untimed\",") +
-                                 (enabled ? "true" : "false") + "],\"request_id\":" + std::to_string(id) + "}";
-        begin_wait(id);
-        if (!write_line(json)) {
-            error = L"无法写入 mpv IPC。";
-        } else {
-            std::string result;
-            ok = wait_pending(3000, result);
-            if (!ok)
-                error = result == "timeout" ? L"等待 mpv 响应超时。" : Utf8ToWide(result);
-        }
-    }
-    if (!ok) {
-        if (error.empty())
-            error = L"无法切换 untimed";
-        set_error(error);
-        return false;
-    }
-    untimed_.store(enabled);
-    {
-        std::lock_guard<std::mutex> lock(mu_);
-        state_.last_error.clear();
-    }
-    notify();
-    return true;
+    return prepare_network_latency(low_latency_.load(), enabled);
 }
 
 void Player::toggle_pause() {
