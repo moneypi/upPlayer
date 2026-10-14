@@ -248,27 +248,79 @@ INT_PTR CALLBACK UrlDlgProc(HWND dialog, UINT message, WPARAM wparam, LPARAM lpa
 }
 
 
+struct WhisperModelHelp {
+    std::wstring summary;
+    std::wstring filename;
+    std::wstring directory;
+    std::wstring url;
+};
+
+INT_PTR CALLBACK WhisperModelHelpDlgProc(HWND dialog, UINT message, WPARAM wparam, LPARAM lparam) {
+    switch (message) {
+    case WM_INITDIALOG: {
+        const auto* help = reinterpret_cast<const WhisperModelHelp*>(lparam);
+        SetWindowTextW(dialog, L"upPlayer — Whisper Model");
+        if (help) {
+            SetDlgItemTextW(dialog, IDC_WHISPER_SUMMARY, help->summary.c_str());
+            SetDlgItemTextW(dialog, IDC_WHISPER_FILE, help->filename.c_str());
+            SetDlgItemTextW(dialog, IDC_WHISPER_DIR, help->directory.c_str());
+            SetDlgItemTextW(dialog, IDC_WHISPER_URL, help->url.c_str());
+        }
+        return TRUE;
+    }
+    case WM_CTLCOLORSTATIC: {
+        const HWND child = reinterpret_cast<HWND>(lparam);
+        const int id = GetDlgCtrlID(child);
+        if (id == IDC_WHISPER_DIR || id == IDC_WHISPER_URL) {
+            const HDC dc = reinterpret_cast<HDC>(wparam);
+            SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT));
+            SetBkColor(dc, GetSysColor(COLOR_WINDOW));
+            return reinterpret_cast<INT_PTR>(GetSysColorBrush(COLOR_WINDOW));
+        }
+        break;
+    }
+    case WM_COMMAND:
+        switch (LOWORD(wparam)) {
+        case IDOK:
+        case IDCANCEL:
+            EndDialog(dialog, LOWORD(wparam));
+            return TRUE;
+        default:
+            break;
+        }
+        break;
+    default:
+        break;
+    }
+    return FALSE;
+}
+
 void ShowWhisperModelLoadHelp(HWND owner, const std::wstring& reason, const std::wstring& expected_filename) {
     WhisperRuntime whisper;
     const std::wstring filename = expected_filename.empty() ? L"ggml-tiny.bin" : expected_filename;
     const std::wstring dir = whisper.primary_models_dir();
     const std::wstring url = WhisperRuntime::download_url_for_model(filename);
-    std::wstring body;
-    body += L"Whisper model load failed.\r\n\r\n";
-    body += L"Reason: ";
-    body += reason.empty() ? L"unknown error" : reason;
-    body += L"\r\n\r\n";
-    body += L"Expected file: ";
-    body += filename;
-    body += L"\r\n";
-    body += L"Model directory:\r\n";
-    body += dir;
-    body += L"\r\n\r\n";
-    body += L"Download ggml models from Hugging Face (same source as scripts\\fetch-whisper-deps.ps1):\r\n";
-    body += url;
-    body += L"\r\n\r\n";
-    body += L"Save the .bin into the model directory above, then pick Whisper Model again.";
-    MessageBoxW(owner, body.c_str(), L"upPlayer — Whisper Model", MB_OK | MB_ICONWARNING);
+    WhisperModelHelp help;
+    help.summary = L"Whisper model load failed.\r\nReason: ";
+    help.summary += reason.empty() ? L"unknown error" : reason;
+    help.filename = L"Expected file: " + filename;
+    help.directory = dir;
+    help.url = url;
+    const HINSTANCE instance = owner ? reinterpret_cast<HINSTANCE>(GetWindowLongPtrW(owner, GWLP_HINSTANCE))
+                                     : GetModuleHandleW(nullptr);
+    const INT_PTR result = DialogBoxParamW(instance, MAKEINTRESOURCEW(IDD_WHISPER_MODEL), owner,
+                                            WhisperModelHelpDlgProc, reinterpret_cast<LPARAM>(&help));
+    if (result == -1) {
+        std::wstring body = help.summary;
+        body += L"\r\n";
+        body += help.filename;
+        body += L"\r\n\r\nModel directory:\r\n";
+        body += dir;
+        body += L"\r\n\r\nHugging Face download URL:\r\n";
+        body += url;
+        body += L"\r\n\r\nSave the .bin into the model directory, then pick Whisper Model again.";
+        MessageBoxW(owner, body.c_str(), L"upPlayer — Whisper Model", MB_OK | MB_ICONWARNING);
+    }
 }
 
 class App {

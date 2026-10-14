@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.5
+
+- Whisper model-missing dialog is copyable; no fetch-script mention
+
 ## 0.6.4
 
 - Default Whisper model is ggml-tiny; release packages tiny instead of base for a smaller installer
