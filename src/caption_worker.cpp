@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <iterator>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
@@ -14,7 +15,7 @@ constexpr double kChunkSec = 5.0;
 constexpr double kOverlapSec = 0.75;
 constexpr double kLeadSec = 10.0;
 // Only jump-forward after this much lag (seek / extreme stall). Smaller gaps must
-// still be transcribed — otherwise slow ASR silently skips sentences.
+// still be transcribed 鈥?otherwise slow ASR silently skips sentences.
 constexpr double kMaxLagBeforeCatchUp = 25.0;
 constexpr size_t kSoftMaxChars = 32;
 constexpr size_t kPromptChars = 80;
@@ -88,8 +89,9 @@ std::wstring FindMpv() {
 
 bool IsBreakChar(wchar_t c) {
     return c == L' ' || c == L'\t' || c == L'\n' || c == L'\r' || c == L',' || c == L'.' ||
-           c == L'!' || c == L'?' || c == L';' || c == L':' || c == L'、' || c == L'，' ||
-           c == L'。' || c == L'！' || c == L'？' || c == L'；' || c == L'：' || c == L'…';
+           c == L'!' || c == L'?' || c == L';' || c == L':' ||
+           c == L'\u3002' || c == L'\uff0c' || c == L'\uff01' || c == L'\uff1f' ||
+           c == L'\u3001' || c == L'\uff1b' || c == L'\uff1a' || c == L'\u2026';
 }
 
 void TrimWide(std::wstring& text) {
@@ -153,6 +155,66 @@ void AppendSplitCues(std::vector<CaptionCue>& cues, double t0, double t1, std::w
     }
 }
 
+std::string NormalizeLanguage(std::string code) {
+    for (char& c : code) {
+        if (c >= 'A' && c <= 'Z')
+            c = static_cast<char>(c - 'A' + 'a');
+    }
+    if (code == "auto")
+        return code;
+    if (code.size() < 2 || code.size() > 8)
+        return "auto";
+    for (char c : code) {
+        if (c < 'a' || c > 'z')
+            return "auto";
+    }
+    return code;
+}
+
+std::string LoadLanguagePref() {
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\upPlayer", 0, KEY_READ, &key) != ERROR_SUCCESS)
+        return "auto";
+    wchar_t buffer[64] = {};
+    DWORD type = 0;
+    DWORD size = sizeof(buffer);
+    const LONG ok =
+        RegQueryValueExW(key, L"WhisperLanguage", nullptr, &type, reinterpret_cast<LPBYTE>(buffer), &size);
+    RegCloseKey(key);
+    if (ok != ERROR_SUCCESS || type != REG_SZ)
+        return "auto";
+    std::string code;
+    for (wchar_t c : std::wstring(buffer)) {
+        if (c == 0)
+            break;
+        if (c > 0 && c < 128)
+            code.push_back(static_cast<char>(c));
+    }
+    return NormalizeLanguage(code);
+}
+
+void SaveLanguagePref(const std::string& code) {
+    HKEY key = nullptr;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\upPlayer", 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key,
+                        nullptr) != ERROR_SUCCESS)
+        return;
+    std::wstring wide;
+    wide.reserve(code.size());
+    for (unsigned char c : code)
+        wide.push_back(static_cast<wchar_t>(c));
+    RegSetValueExW(key, L"WhisperLanguage", 0, REG_SZ, reinterpret_cast<const BYTE*>(wide.c_str()),
+                   static_cast<DWORD>((wide.size() + 1) * sizeof(wchar_t)));
+    RegCloseKey(key);
+}
+
+std::wstring AsciiToWide(const std::string& text) {
+    std::wstring out;
+    out.reserve(text.size());
+    for (unsigned char c : text)
+        out.push_back(static_cast<wchar_t>(c));
+    return out;
+}
+
 std::string WideToUtf8(const std::wstring& text) {
     if (text.empty())
         return {};
@@ -169,6 +231,8 @@ std::string WideToUtf8(const std::wstring& text) {
 }  // namespace
 
 CaptionWorker::CaptionWorker(HWND notify) : notify_(notify) {
+    language_pref_ = LoadLanguagePref();
+    asr_language_ = language_pref_;
     run_ = true;
     thread_ = std::thread([this] { thread_main(); });
 }
@@ -177,15 +241,15 @@ CaptionWorker::~CaptionWorker() {
     {
         std::lock_guard<std::mutex> lock(mu_);
         run_ = false;
-        enabled_ = false;
         wake_ = true;
     }
     cv_.notify_all();
     whisper_.cancel();
     if (thread_.joinable())
         thread_.join();
+    if (srt_thread_.joinable())
+        srt_thread_.join();
 }
-
 void CaptionWorker::set_enabled(bool enabled) {
     {
         std::lock_guard<std::mutex> lock(mu_);
@@ -198,10 +262,10 @@ void CaptionWorker::set_enabled(bool enabled) {
             cues_.clear();
             covered_until_ = 0.0;
             last_prompt_.clear();
-            asr_language_ = "auto";
+            asr_language_ = language_pref_;
         } else {
             status_ = CaptionStatus::LoadingModel;
-            status_text_ = L"Captions: starting…";
+            status_text_ = L"Captions: starting...";
             covered_until_ = (std::max)(0.0, time_pos_ - 0.5);
             wake_ = true;
         }
@@ -218,6 +282,103 @@ bool CaptionWorker::enabled() const {
     return enabled_;
 }
 
+std::vector<CaptionOption> CaptionWorker::languages() {
+    static const CaptionOption kLanguages[] = {
+        {L"auto", L"Auto"},
+        {L"en", L"English"},
+        {L"zh", L"Chinese"},
+        {L"ja", L"Japanese"},
+        {L"ko", L"Korean"},
+        {L"fr", L"French"},
+        {L"de", L"German"},
+        {L"es", L"Spanish"},
+        {L"pt", L"Portuguese"},
+        {L"ru", L"Russian"},
+        {L"it", L"Italian"},
+        {L"ar", L"Arabic"},
+        {L"hi", L"Hindi"},
+        {L"th", L"Thai"},
+        {L"vi", L"Vietnamese"},
+        {L"id", L"Indonesian"},
+        {L"tr", L"Turkish"},
+        {L"nl", L"Dutch"},
+        {L"pl", L"Polish"},
+        {L"uk", L"Ukrainian"},
+        {L"sv", L"Swedish"},
+        {L"cs", L"Czech"},
+        {L"da", L"Danish"},
+        {L"fi", L"Finnish"},
+        {L"el", L"Greek"},
+        {L"he", L"Hebrew"},
+        {L"hu", L"Hungarian"},
+        {L"no", L"Norwegian"},
+        {L"ro", L"Romanian"},
+    };
+    return std::vector<CaptionOption>(std::begin(kLanguages), std::end(kLanguages));
+}
+
+std::wstring CaptionWorker::language() const {
+    std::lock_guard<std::mutex> lock(mu_);
+    return AsciiToWide(language_pref_);
+}
+
+void CaptionWorker::set_language(const std::wstring& code) {
+    std::string ascii;
+    ascii.reserve(code.size());
+    for (wchar_t c : code) {
+        if (c > 0 && c < 128)
+            ascii.push_back(static_cast<char>(c));
+    }
+    const std::string normalized = NormalizeLanguage(ascii);
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (language_pref_ == normalized)
+            return;
+        language_pref_ = normalized;
+        asr_language_ = normalized;
+        if (enabled_)
+            wake_ = true;
+    }
+    SaveLanguagePref(normalized);
+    cv_.notify_all();
+}
+
+std::vector<CaptionOption> CaptionWorker::models() const {
+    std::vector<CaptionOption> out;
+    for (const WhisperModel& model : whisper_.models()) {
+        CaptionOption option;
+        option.id = model.filename;
+        option.label = model.label;
+        out.push_back(std::move(option));
+    }
+    return out;
+}
+
+std::wstring CaptionWorker::model_id() const {
+    return whisper_.model_filename();
+}
+
+bool CaptionWorker::set_model(const std::wstring& filename) {
+    const std::wstring previous = whisper_.model_filename();
+    if (!whisper_.select_model(filename))
+        return false;
+    if (_wcsicmp(previous.c_str(), whisper_.model_filename().c_str()) == 0)
+        return true;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (enabled_) {
+            status_ = CaptionStatus::LoadingModel;
+            status_text_ = L"Captions: loading model...";
+            wake_ = true;
+        }
+    }
+    whisper_.cancel();
+    cv_.notify_all();
+    if (notify_)
+        PostMessageW(notify_, WM_CAPTION_UPDATE, 0, 0);
+    return true;
+}
+
 void CaptionWorker::set_media(const std::wstring& path, double duration) {
     {
         std::lock_guard<std::mutex> lock(mu_);
@@ -227,7 +388,7 @@ void CaptionWorker::set_media(const std::wstring& path, double duration) {
         covered_until_ = 0.0;
         seek_epoch_ = 0.0;
         last_prompt_.clear();
-        asr_language_ = "auto";
+        asr_language_ = language_pref_;
         if (enabled_) {
             status_ = CaptionStatus::Ready;
             status_text_.clear();
@@ -318,16 +479,21 @@ std::wstring CaptionWorker::utf8_to_wide(const std::string& text) {
 
 bool CaptionWorker::extract_pcm(double start, double length, const std::wstring& wav_path,
                                 std::wstring* error) {
+    std::wstring media;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        media = media_path_;
+    }
+    return extract_pcm_from(media, start, length, wav_path, error);
+}
+
+bool CaptionWorker::extract_pcm_from(const std::wstring& media, double start, double length,
+                                     const std::wstring& wav_path, std::wstring* error) {
     const std::wstring mpv = FindMpv();
     if (mpv.empty()) {
         if (error)
             *error = L"mpv.exe not found (needed to extract audio for captions)";
         return false;
-    }
-    std::wstring media;
-    {
-        std::lock_guard<std::mutex> lock(mu_);
-        media = media_path_;
     }
     if (media.empty()) {
         if (error)
@@ -353,13 +519,15 @@ bool CaptionWorker::extract_pcm(double start, double length, const std::wstring&
     si.wShowWindow = SW_HIDE;
     PROCESS_INFORMATION pi{};
     std::wstring mutable_cmd = command;
+    // Longer wait for offline SRT chunks (up to ~30s of audio).
+    const DWORD timeout_ms = length > 10.0 ? 300000 : 120000;
     if (!CreateProcessW(nullptr, mutable_cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr,
                         nullptr, &si, &pi)) {
         if (error)
             *error = L"Failed to start mpv audio extract";
         return false;
     }
-    WaitForSingleObject(pi.hProcess, 120000);
+    WaitForSingleObject(pi.hProcess, timeout_ms);
     DWORD exit_code = 1;
     GetExitCodeProcess(pi.hProcess, &exit_code);
     CloseHandle(pi.hThread);
@@ -375,7 +543,6 @@ bool CaptionWorker::extract_pcm(double start, double length, const std::wstring&
     }
     return true;
 }
-
 void CaptionWorker::thread_main() {
     while (true) {
         std::wstring media;
@@ -452,15 +619,19 @@ void CaptionWorker::thread_main() {
             std::lock_guard<std::mutex> lock(mu_);
             status_ = CaptionStatus::Error;
             status_text_ =
-                L"Whisper CLI not found — run scripts\\fetch-whisper-deps.ps1";
+                L"Whisper CLI not found 鈥?run scripts\\fetch-whisper-deps.ps1";
             if (notify_)
                 PostMessageW(notify_, WM_CAPTION_UPDATE, 0, 0);
             continue;
         }
         if (!whisper_.ensure_model()) {
-            std::lock_guard<std::mutex> lock(mu_);
-            status_ = CaptionStatus::Error;
-            status_text_ = whisper_.last_error();
+            const std::wstring err = whisper_.last_error();
+            {
+                std::lock_guard<std::mutex> lock(mu_);
+                status_ = CaptionStatus::Error;
+                // Keep tagged missing:/server: prefix so the UI can open a help MessageBox.
+                status_text_ = err.empty() ? L"missing:ggml-base.bin" : err;
+            }
             if (notify_)
                 PostMessageW(notify_, WM_CAPTION_UPDATE, 0, 0);
             continue;
@@ -490,7 +661,7 @@ void CaptionWorker::thread_main() {
         {
             std::lock_guard<std::mutex> lock(mu_);
             status_ = CaptionStatus::Transcribing;
-            status_text_.clear();  // do not mask active cues with "识别中"
+            status_text_.clear();  // do not mask active cues with "璇嗗埆涓?
         }
         if (notify_)
             PostMessageW(notify_, WM_CAPTION_UPDATE, 0, 0);
@@ -586,7 +757,7 @@ void CaptionWorker::thread_main() {
                 }
                 const double span = t1 - t0;
                 if (t1 <= playhead_after + 0.05) {
-                    // Entirely behind the playhead when ASR finished — show briefly now.
+                    // Entirely behind the playhead when ASR finished 鈥?show briefly now.
                     const double show = (std::min)(4.0, (std::max)(1.6, span));
                     CapDiag("event=LATE_SHIFT raw_t0=%.3f raw_t1=%.3f playhead=%.3f -> show=%.2fs text=%s",
                             t0, t1, playhead_after, show, seg.text.c_str());
@@ -629,4 +800,332 @@ void CaptionWorker::thread_main() {
         if (notify_)
             PostMessageW(notify_, WM_CAPTION_UPDATE, 0, 0);
     }
+}
+
+
+std::string CaptionWorker::wide_to_utf8(const std::wstring& text) {
+    if (text.empty())
+        return {};
+    const int needed = WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()),
+                                           nullptr, 0, nullptr, nullptr);
+    if (needed <= 0)
+        return {};
+    std::string out(static_cast<size_t>(needed), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), out.data(), needed,
+                        nullptr, nullptr);
+    return out;
+}
+
+std::wstring CaptionWorker::suggest_srt_path(const std::wstring& media) {
+    const auto slash = media.find_last_of(L"\\/");
+    const auto dot = media.find_last_of(L'.');
+    if (dot != std::wstring::npos && (slash == std::wstring::npos || dot > slash))
+        return media.substr(0, dot) + L".srt";
+    return media + L".srt";
+}
+
+bool CaptionWorker::write_srt_file(const std::wstring& path, const std::vector<CaptionCue>& cues,
+                                   std::wstring* error) {
+    FILE* fp = nullptr;
+    if (_wfopen_s(&fp, path.c_str(), L"wb") != 0 || !fp) {
+        if (error)
+            *error = L"Cannot write SRT file";
+        return false;
+    }
+    // UTF-8 BOM helps Notepad / some players with CJK.
+    const unsigned char bom[] = {0xEF, 0xBB, 0xBF};
+    fwrite(bom, 1, 3, fp);
+
+    auto format_ts = [](double seconds, char* buf, size_t buf_size) {
+        if (!(seconds >= 0.0))
+            seconds = 0.0;
+        const int total_ms = static_cast<int>(seconds * 1000.0 + 0.5);
+        const int ms = total_ms % 1000;
+        int total_s = total_ms / 1000;
+        const int s = total_s % 60;
+        total_s /= 60;
+        const int m = total_s % 60;
+        const int h = total_s / 60;
+        snprintf(buf, buf_size, "%02d:%02d:%02d,%03d", h, m, s, ms);
+    };
+
+    int index = 1;
+    for (const auto& cue : cues) {
+        if (cue.text.empty() || !(cue.end > cue.start))
+            continue;
+        char t0[32];
+        char t1[32];
+        format_ts(cue.start, t0, sizeof(t0));
+        format_ts(cue.end, t1, sizeof(t1));
+        fprintf(fp, "%d\n%s --> %s\n", index, t0, t1);
+        const std::string utf8 = wide_to_utf8(cue.text);
+        fwrite(utf8.data(), 1, utf8.size(), fp);
+        fprintf(fp, "\n\n");
+        ++index;
+    }
+    fclose(fp);
+    if (index == 1) {
+        if (error)
+            *error = L"No speech detected (empty SRT)";
+        // Still wrote an empty-ish file; treat as soft success with warning via error text.
+        return true;
+    }
+    return true;
+}
+
+void CaptionWorker::post_srt(WPARAM code) {
+    if (notify_)
+        PostMessageW(notify_, WM_SRT_DONE, code, 0);
+}
+
+bool CaptionWorker::srt_busy() const {
+    return srt_busy_.load();
+}
+
+std::wstring CaptionWorker::srt_status() const {
+    std::lock_guard<std::mutex> lock(mu_);
+    return srt_status_;
+}
+
+std::wstring CaptionWorker::last_srt_path() const {
+    std::lock_guard<std::mutex> lock(mu_);
+    return last_srt_path_;
+}
+
+bool CaptionWorker::request_generate_srt(std::wstring* error) {
+    if (srt_busy_.exchange(true)) {
+        if (error)
+            *error = L"SRT generation is already running";
+        return false;
+    }
+
+    std::wstring media;
+    double duration = -1.0;
+    std::string language;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        media = media_path_;
+        duration = duration_;
+        language = language_pref_;
+        srt_status_ = L"Starting...";
+        last_srt_path_.clear();
+    }
+
+    auto starts_with_ci = [](const std::wstring& s, const wchar_t* prefix) {
+        const size_t n = wcslen(prefix);
+        if (s.size() < n)
+            return false;
+        for (size_t i = 0; i < n; ++i) {
+            wchar_t a = s[i];
+            wchar_t b = prefix[i];
+            if (a >= L'A' && a <= L'Z')
+                a = static_cast<wchar_t>(a - L'A' + L'a');
+            if (b >= L'A' && b <= L'Z')
+                b = static_cast<wchar_t>(b - L'A' + L'a');
+            if (a != b)
+                return false;
+        }
+        return true;
+    };
+
+    if (media.empty()) {
+        srt_busy_ = false;
+        if (error)
+            *error = L"Open a local media file first";
+        return false;
+    }
+    if (starts_with_ci(media, L"http://") || starts_with_ci(media, L"https://") ||
+        starts_with_ci(media, L"rtsp://") || starts_with_ci(media, L"rtsps://") ||
+        starts_with_ci(media, L"rtp://") || starts_with_ci(media, L"udp://")) {
+        srt_busy_ = false;
+        if (error)
+            *error = L"Generate SRT needs a local media file (not a network stream)";
+        return false;
+    }
+    if (!(duration > 0.5)) {
+        srt_busy_ = false;
+        if (error)
+            *error = L"Media duration is unknown; wait until the file is fully opened";
+        return false;
+    }
+
+    if (srt_thread_.joinable())
+        srt_thread_.join();
+    srt_thread_ = std::thread([this, media, duration, language] {
+        srt_thread_main(media, duration, language);
+    });
+    post_srt(0);
+    return true;
+}
+
+void CaptionWorker::srt_thread_main(std::wstring media, double duration, std::string language) {
+    constexpr double kSrtChunkSec = 28.0;
+    constexpr double kSrtOverlapSec = 1.0;
+
+    auto set_status = [this](const std::wstring& text) {
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            srt_status_ = text;
+        }
+        post_srt(0);
+    };
+
+    if (!whisper_.ensure_model([&](const std::wstring& status) { set_status(status); })) {
+        std::wstring err = whisper_.last_error();
+        if (err.empty())
+            err = L"Whisper model missing";
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            srt_status_ = err;
+        }
+        srt_busy_ = false;
+        post_srt(2);
+        return;
+    }
+
+    set_status(L"Generating SRT...");
+
+    std::vector<CaptionCue> all_cues;
+    std::string prompt;
+    std::string asr_lang = language.empty() ? "auto" : language;
+    double covered = 0.0;
+    int chunk_index = 0;
+
+    while (covered < duration - 0.05) {
+        if (!run_) {
+            {
+                std::lock_guard<std::mutex> lock(mu_);
+                srt_status_ = L"Cancelled";
+            }
+            srt_busy_ = false;
+            post_srt(2);
+            return;
+        }
+
+        double start = covered;
+        double length = kSrtChunkSec;
+        if (start + length > duration)
+            length = duration - start;
+        if (length < 0.3)
+            break;
+
+        wchar_t progress[128];
+        swprintf_s(progress, L"Generating SRT... %.0f%%", (start / duration) * 100.0);
+        set_status(progress);
+
+        wchar_t temp_dir[MAX_PATH] = {};
+        wchar_t temp_file[MAX_PATH] = {};
+        GetTempPathW(MAX_PATH, temp_dir);
+        if (!GetTempFileNameW(temp_dir, L"usrt", 0, temp_file)) {
+            {
+                std::lock_guard<std::mutex> lock(mu_);
+                srt_status_ = L"Cannot create temp WAV";
+            }
+            srt_busy_ = false;
+            post_srt(2);
+            return;
+        }
+        const std::wstring wav_path = std::wstring(temp_file) + L".wav";
+        DeleteFileW(temp_file);
+
+        std::wstring extract_error;
+        if (!extract_pcm_from(media, start, length, wav_path, &extract_error)) {
+            DeleteFileW(wav_path.c_str());
+            {
+                std::lock_guard<std::mutex> lock(mu_);
+                srt_status_ = extract_error.empty() ? L"Audio extract failed" : extract_error;
+            }
+            srt_busy_ = false;
+            post_srt(2);
+            return;
+        }
+
+        std::vector<WhisperSegment> segments;
+        std::wstring asr_error;
+        const bool ok = whisper_.transcribe(wav_path, prompt, segments, &asr_error, asr_lang);
+        DeleteFileW(wav_path.c_str());
+        if (!ok) {
+            {
+                std::lock_guard<std::mutex> lock(mu_);
+                srt_status_ = asr_error.empty() ? whisper_.last_error() : asr_error;
+                if (srt_status_.empty())
+                    srt_status_ = L"Transcription failed";
+            }
+            srt_busy_ = false;
+            post_srt(2);
+            return;
+        }
+
+        if (asr_lang == "auto") {
+            const std::string detected = whisper_.last_detected_language();
+            if (!detected.empty())
+                asr_lang = detected;
+        }
+
+        for (const auto& seg : segments) {
+            double rel0 = seg.t0;
+            double rel1 = seg.t1;
+            if (rel0 < 0.0)
+                rel0 = 0.0;
+            if (rel1 > length)
+                rel1 = length;
+            if (rel0 >= length || rel1 <= rel0 + 0.05)
+                continue;
+            CaptionCue cue;
+            cue.start = start + rel0;
+            cue.end = start + rel1;
+            cue.text = utf8_to_wide(seg.text);
+            TrimWide(cue.text);
+            if (cue.text.empty())
+                continue;
+            // Drop cues that fall mostly inside the previous overlap window.
+            if (!all_cues.empty() && cue.end <= all_cues.back().end + 0.05 &&
+                cue.start < covered + 0.05)
+                continue;
+            all_cues.push_back(std::move(cue));
+            const std::string u8 = seg.text;
+            if (!u8.empty()) {
+                if (!prompt.empty())
+                    prompt.push_back(' ');
+                prompt += u8;
+                if (prompt.size() > kPromptChars * 2)
+                    prompt = prompt.substr(prompt.size() - kPromptChars);
+            }
+        }
+
+        const double advance = (std::max)(0.5, length - kSrtOverlapSec);
+        covered = start + advance;
+        if (covered > duration)
+            covered = duration;
+        ++chunk_index;
+        (void)chunk_index;
+    }
+
+    const std::wstring out_path = suggest_srt_path(media);
+    std::wstring write_error;
+    if (!write_srt_file(out_path, all_cues, &write_error)) {
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            srt_status_ = write_error.empty() ? L"Failed to write SRT" : write_error;
+        }
+        srt_busy_ = false;
+        post_srt(2);
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        last_srt_path_ = out_path;
+        if (all_cues.empty())
+            srt_status_ = write_error.empty()
+                              ? (L"Saved empty SRT (no speech): " + out_path)
+                              : write_error;
+        else {
+            wchar_t buf[64];
+            swprintf_s(buf, L"Saved %d cues", static_cast<int>(all_cues.size()));
+            srt_status_ = std::wstring(buf) + L": " + out_path;
+        }
+    }
+    srt_busy_ = false;
+    post_srt(1);
 }

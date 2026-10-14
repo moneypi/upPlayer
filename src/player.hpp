@@ -66,6 +66,8 @@ public:
     // PotPlayer-like bottom caption (ASS overlay); empty text clears it.
     void show_caption(const std::string& text);
     void clear_caption();
+    // Load an external subtitle file (mpv sub-add select). Returns false on failure.
+    bool add_external_subtitle(const std::wstring& path, std::wstring* error = nullptr);
     // Fire-and-forget video frame grab (never waits). Used by YOLO worker.
     void screenshot_to_file(const std::wstring& path);
     // YOLO detection overlay: ASS HUD (osd id 11) + optional BGRA box bitmap (overlay id 12).

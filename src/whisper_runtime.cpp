@@ -2,6 +2,7 @@
 
 #include <winhttp.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -153,28 +154,79 @@ std::wstring FindServer() {
     return {};
 }
 
-std::wstring FirstExistingModel(const std::vector<std::wstring>& dirs) {
-    const wchar_t* names[] = {
-        L"ggml-base.bin",
-        L"ggml-small.bin",
-        L"ggml-medium.bin",
-        L"ggml-large-v3.bin",
-        L"ggml-tiny.bin",
-    };
-    for (const std::wstring& dir : dirs) {
-        if (dir.empty())
-            continue;
-        for (const wchar_t* name : names) {
-            const std::wstring path = dir + L"\\" + name;
-            if (FileExists(path))
-                return path;
-        }
+std::wstring ToLower(std::wstring text) {
+    for (wchar_t& c : text) {
+        if (c >= L'A' && c <= L'Z')
+            c = static_cast<wchar_t>(c - L'A' + L'a');
     }
-    return {};
+    return text;
 }
 
-std::wstring FindModel() {
-    std::vector<std::wstring> dirs;
+bool SameText(const std::wstring& a, const std::wstring& b) {
+    return _wcsicmp(a.c_str(), b.c_str()) == 0;
+}
+
+std::wstring FileNameOf(const std::wstring& path) {
+    const auto slash = path.find_last_of(L"\\/");
+    if (slash == std::wstring::npos)
+        return path;
+    return path.substr(slash + 1);
+}
+
+std::wstring ModelLabel(const std::wstring& filename) {
+    std::wstring stem = filename;
+    if (stem.size() >= 5 && SameText(stem.substr(0, 5), L"ggml-"))
+        stem = stem.substr(5);
+    if (stem.size() >= 4 && SameText(stem.substr(stem.size() - 4), L".bin"))
+        stem.resize(stem.size() - 4);
+    for (wchar_t& c : stem) {
+        if (c == L'-')
+            c = L' ';
+    }
+    if (!stem.empty() && stem[0] >= L'a' && stem[0] <= L'z')
+        stem[0] = static_cast<wchar_t>(stem[0] - L'a' + L'A');
+    return stem.empty() ? filename : stem;
+}
+
+int ModelSortKey(const std::wstring& filename) {
+    const std::wstring lower = ToLower(filename);
+    struct Rank {
+        const wchar_t* name;
+        int key;
+    };
+    static const Rank kOrder[] = {
+        {L"ggml-tiny.bin", 10},
+        {L"ggml-tiny.en.bin", 11},
+        {L"ggml-base.bin", 20},
+        {L"ggml-base.en.bin", 21},
+        {L"ggml-small.bin", 30},
+        {L"ggml-small.en.bin", 31},
+        {L"ggml-medium.bin", 40},
+        {L"ggml-medium.en.bin", 41},
+        {L"ggml-large-v1.bin", 50},
+        {L"ggml-large-v2.bin", 51},
+        {L"ggml-large-v3.bin", 52},
+        {L"ggml-large-v3-turbo.bin", 53},
+        {L"ggml-large.bin", 54},
+    };
+    for (const Rank& item : kOrder) {
+        if (lower == item.name)
+            return item.key;
+    }
+    if (lower.find(L"tiny") != std::wstring::npos)
+        return 15;
+    if (lower.find(L"base") != std::wstring::npos)
+        return 25;
+    if (lower.find(L"small") != std::wstring::npos)
+        return 35;
+    if (lower.find(L"medium") != std::wstring::npos)
+        return 45;
+    if (lower.find(L"large") != std::wstring::npos)
+        return 55;
+    return 1000;
+}
+
+void AppendModelDirs(std::vector<std::wstring>& dirs) {
     const std::wstring root = ExeDirectory();
     dirs.push_back(root + L"\\whisper\\models");
     dirs.push_back(root + L"\\models");
@@ -194,8 +246,102 @@ std::wstring FindModel() {
     const std::wstring pot = PotPlayerInstallRoot();
     if (!pot.empty())
         dirs.push_back(pot + L"\\Model");
+}
 
-    return FirstExistingModel(dirs);
+std::vector<WhisperModel> DiscoverModels() {
+    std::vector<std::wstring> dirs;
+    AppendModelDirs(dirs);
+
+    std::vector<WhisperModel> found;
+    for (const std::wstring& dir : dirs) {
+        if (dir.empty())
+            continue;
+        const std::wstring pattern = dir + L"\\ggml-*.bin";
+        WIN32_FIND_DATAW data{};
+        const HANDLE handle = FindFirstFileW(pattern.c_str(), &data);
+        if (handle == INVALID_HANDLE_VALUE)
+            continue;
+        do {
+            if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+                continue;
+            if (data.nFileSizeHigh == 0 && data.nFileSizeLow == 0)
+                continue;
+            const std::wstring filename = data.cFileName;
+            bool duplicate = false;
+            for (const WhisperModel& existing : found) {
+                if (SameText(existing.filename, filename)) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (duplicate)
+                continue;
+            WhisperModel model;
+            model.path = dir + L"\\" + filename;
+            model.filename = filename;
+            model.label = ModelLabel(filename);
+            found.push_back(std::move(model));
+        } while (FindNextFileW(handle, &data));
+        FindClose(handle);
+    }
+
+    std::sort(found.begin(), found.end(), [](const WhisperModel& a, const WhisperModel& b) {
+        const int ka = ModelSortKey(a.filename);
+        const int kb = ModelSortKey(b.filename);
+        if (ka != kb)
+            return ka < kb;
+        return _wcsicmp(a.filename.c_str(), b.filename.c_str()) < 0;
+    });
+    return found;
+}
+
+std::wstring PreferredModelPath(const std::vector<WhisperModel>& models, const std::wstring& preferred) {
+    if (!preferred.empty()) {
+        for (const WhisperModel& model : models) {
+            if (SameText(model.filename, preferred))
+                return model.path;
+        }
+    }
+    const wchar_t* fallback[] = {
+        L"ggml-base.bin",
+        L"ggml-small.bin",
+        L"ggml-medium.bin",
+        L"ggml-large-v3.bin",
+        L"ggml-tiny.bin",
+    };
+    for (const wchar_t* name : fallback) {
+        for (const WhisperModel& model : models) {
+            if (SameText(model.filename, name))
+                return model.path;
+        }
+    }
+    if (!models.empty())
+        return models.front().path;
+    return {};
+}
+
+std::wstring LoadRegString(const wchar_t* name) {
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\upPlayer", 0, KEY_READ, &key) != ERROR_SUCCESS)
+        return {};
+    wchar_t buffer[512] = {};
+    DWORD type = 0;
+    DWORD size = sizeof(buffer);
+    const LONG ok = RegQueryValueExW(key, name, nullptr, &type, reinterpret_cast<LPBYTE>(buffer), &size);
+    RegCloseKey(key);
+    if (ok != ERROR_SUCCESS || (type != REG_SZ && type != REG_EXPAND_SZ))
+        return {};
+    return buffer;
+}
+
+void SaveRegString(const wchar_t* name, const std::wstring& value) {
+    HKEY key = nullptr;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\upPlayer", 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key,
+                        nullptr) != ERROR_SUCCESS)
+        return;
+    RegSetValueExW(key, name, 0, REG_SZ, reinterpret_cast<const BYTE*>(value.c_str()),
+                   static_cast<DWORD>((value.size() + 1) * sizeof(wchar_t)));
+    RegCloseKey(key);
 }
 
 double ParseTimestamp(const std::string& value) {
@@ -593,8 +739,111 @@ std::wstring WhisperRuntime::cli_path() const {
     return FindCli();
 }
 
+void WhisperRuntime::load_settings() const {
+    if (settings_loaded_)
+        return;
+    selected_model_file_ = LoadRegString(L"WhisperModel");
+    settings_loaded_ = true;
+}
+
 std::wstring WhisperRuntime::model_path() const {
-    return FindModel();
+    std::wstring selected;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        load_settings();
+        selected = selected_model_file_;
+    }
+    return PreferredModelPath(DiscoverModels(), selected);
+}
+
+std::wstring WhisperRuntime::model_filename() const {
+    return FileNameOf(model_path());
+}
+
+
+std::wstring WhisperRuntime::primary_models_dir() const {
+    return ExeDirectory() + L"\\whisper\\models";
+}
+
+std::wstring WhisperRuntime::download_url_for_model(const std::wstring& filename) {
+    std::wstring name = filename.empty() ? L"ggml-base.bin" : FileNameOf(filename);
+    if (name.empty())
+        name = L"ggml-base.bin";
+    // Same source as scripts/fetch-whisper-deps.ps1
+    return L"https://huggingface.co/ggerganov/whisper.cpp/resolve/main/" + name;
+}
+
+std::vector<WhisperModel> WhisperRuntime::models() const {
+    std::vector<WhisperModel> found = DiscoverModels();
+    const wchar_t* catalog[] = {
+        L"ggml-tiny.bin",
+        L"ggml-tiny.en.bin",
+        L"ggml-base.bin",
+        L"ggml-base.en.bin",
+        L"ggml-small.bin",
+        L"ggml-small.en.bin",
+        L"ggml-medium.bin",
+        L"ggml-medium.en.bin",
+        L"ggml-large-v3.bin",
+        L"ggml-large-v3-turbo.bin",
+    };
+    for (const wchar_t* name : catalog) {
+        bool have = false;
+        for (const WhisperModel& existing : found) {
+            if (SameText(existing.filename, name)) {
+                have = true;
+                break;
+            }
+        }
+        if (have)
+            continue;
+        WhisperModel model;
+        model.path = primary_models_dir() + L"\\" + name;
+        model.filename = name;
+        model.label = ModelLabel(name) + L" (download)";
+        found.push_back(std::move(model));
+    }
+    std::sort(found.begin(), found.end(), [](const WhisperModel& a, const WhisperModel& b) {
+        const int ka = ModelSortKey(a.filename);
+        const int kb = ModelSortKey(b.filename);
+        if (ka != kb)
+            return ka < kb;
+        return _wcsicmp(a.filename.c_str(), b.filename.c_str()) < 0;
+    });
+    return found;
+}
+
+bool WhisperRuntime::select_model(const std::wstring& filename) {
+    if (filename.empty())
+        return false;
+    const std::vector<WhisperModel> available = DiscoverModels();
+    std::wstring resolved;
+    std::wstring stored_name;
+    for (const WhisperModel& model : available) {
+        if (SameText(model.filename, filename)) {
+            resolved = model.path;
+            stored_name = model.filename;
+            break;
+        }
+    }
+    if (resolved.empty()) {
+        std::lock_guard<std::mutex> lock(mu_);
+        last_error_ = L"missing:" + filename;
+        return false;
+    }
+
+    bool restart = false;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        settings_loaded_ = true;
+        selected_model_file_ = stored_name;
+        server_failed_ = false;
+        restart = server_process_ && !SameText(server_model_, resolved);
+    }
+    SaveRegString(L"WhisperModel", stored_name);
+    if (restart)
+        stop_server();
+    return true;
 }
 
 std::wstring WhisperRuntime::last_error() const {
@@ -633,19 +882,39 @@ std::wstring WhisperRuntime::backend_label() const {
             const bool warm = server_healthy();
             label += warm ? L" server" : L" +server";
         }
+        const std::wstring model = model_filename();
+        if (!model.empty()) {
+            label += L" · ";
+            label += ModelLabel(model);
+        }
     }
     return label;
 }
 
 bool WhisperRuntime::ensure_model(const ProgressFn& progress) {
-    last_error_.clear();
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        last_error_.clear();
+    }
     if (!model_path().empty())
         return true;
-    last_error_ =
-        L"No Whisper model. Run scripts\\fetch-whisper-deps.ps1 "
-        L"or place ggml-base.bin under whisper\\models\\ next to upPlayer.";
+    std::wstring expected = L"ggml-base.bin";
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        load_settings();
+        if (!selected_model_file_.empty())
+            expected = selected_model_file_;
+    }
+    const std::wstring dir = primary_models_dir();
+    const std::wstring url = download_url_for_model(expected);
+    std::wstring message =
+        L"missing:" + expected + L"|" + dir + L"|" + url;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        last_error_ = message;
+    }
     if (progress)
-        progress(last_error_);
+        progress(message);
     return false;
 }
 
@@ -671,6 +940,7 @@ void WhisperRuntime::stop_server() {
         server_process_ = nullptr;
         server_pid_ = 0;
         server_port_ = 0;
+        server_model_.clear();
     }
     if (!proc)
         return;
@@ -680,20 +950,39 @@ void WhisperRuntime::stop_server() {
 }
 
 bool WhisperRuntime::ensure_server() {
-    {
-        std::lock_guard<std::mutex> lock(mu_);
-        if (server_failed_)
-            return false;
-        if (server_process_ && server_healthy())
+    // A second pass picks up a model change that landed while the first start was in flight.
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        const std::wstring wanted = model_path();
+        bool running_matches = false;
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            if (server_failed_)
+                return false;
+            if (server_process_ && server_healthy() &&
+                (wanted.empty() || SameText(server_model_, wanted)))
+                running_matches = true;
+        }
+        if (running_matches)
             return true;
-    }
-    // Restart if the previous handle is dead.
-    stop_server();
 
-    const std::wstring server = FindServer();
-    const std::wstring model = model_path();
-    if (server.empty() || model.empty())
-        return false;
+        stop_server();
+
+        const std::wstring server = FindServer();
+        const std::wstring model = model_path();
+        if (server.empty() || model.empty())
+            return false;
+        if (!start_server(server, model)) {
+            std::lock_guard<std::mutex> lock(mu_);
+            if (server_failed_)
+                return false;
+            continue;
+        }
+        return true;
+    }
+    return false;
+}
+
+bool WhisperRuntime::start_server(const std::wstring& server, const std::wstring& model) {
 
     SYSTEM_INFO sysinfo{};
     GetSystemInfo(&sysinfo);
@@ -722,7 +1011,7 @@ bool WhisperRuntime::ensure_server() {
                         cwd.empty() ? nullptr : cwd.c_str(), &si, &pi)) {
         std::lock_guard<std::mutex> lock(mu_);
         server_failed_ = true;
-        last_error_ = L"Failed to start whisper-server";
+        last_error_ = L"server:Failed to start whisper-server";
         return false;
     }
     CloseHandle(pi.hThread);
@@ -731,22 +1020,36 @@ bool WhisperRuntime::ensure_server() {
         server_process_ = pi.hProcess;
         server_pid_ = pi.dwProcessId;
         server_port_ = port;
+        server_model_ = model;
+    }
+
+    if (!SameText(model_path(), model)) {
+        stop_server();
+        return false;
     }
 
     // Model load on Vulkan can take several seconds.
     for (int i = 0; i < 60; ++i) {
-        if (server_healthy())
+        if (server_healthy()) {
+            if (!SameText(model_path(), model)) {
+                stop_server();
+                return false;
+            }
             return true;
+        }
         DWORD code = STILL_ACTIVE;
         if (!GetExitCodeProcess(pi.hProcess, &code) || code != STILL_ACTIVE)
             break;
         Sleep(250);
     }
 
+    const bool superseded = !SameText(model_path(), model);
     stop_server();
+    if (superseded)
+        return false;
     std::lock_guard<std::mutex> lock(mu_);
     server_failed_ = true;
-    last_error_ = L"whisper-server failed to become ready";
+    last_error_ = L"server:whisper-server failed to become ready";
     return false;
 }
 

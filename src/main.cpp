@@ -1,4 +1,5 @@
 #include "caption_worker.hpp"
+#include "whisper_runtime.hpp"
 #include "player.hpp"
 #include "resource.h"
 #include "version.hpp"
@@ -246,6 +247,30 @@ INT_PTR CALLBACK UrlDlgProc(HWND dialog, UINT message, WPARAM wparam, LPARAM lpa
     return FALSE;
 }
 
+
+void ShowWhisperModelLoadHelp(HWND owner, const std::wstring& reason, const std::wstring& expected_filename) {
+    WhisperRuntime whisper;
+    const std::wstring filename = expected_filename.empty() ? L"ggml-base.bin" : expected_filename;
+    const std::wstring dir = whisper.primary_models_dir();
+    const std::wstring url = WhisperRuntime::download_url_for_model(filename);
+    std::wstring body;
+    body += L"Whisper model load failed.\r\n\r\n";
+    body += L"Reason: ";
+    body += reason.empty() ? L"unknown error" : reason;
+    body += L"\r\n\r\n";
+    body += L"Expected file: ";
+    body += filename;
+    body += L"\r\n";
+    body += L"Model directory:\r\n";
+    body += dir;
+    body += L"\r\n\r\n";
+    body += L"Download ggml models from Hugging Face (same source as scripts\\fetch-whisper-deps.ps1):\r\n";
+    body += url;
+    body += L"\r\n\r\n";
+    body += L"Save the .bin into the model directory above, then pick Whisper Model again.";
+    MessageBoxW(owner, body.c_str(), L"upPlayer — Whisper Model", MB_OK | MB_ICONWARNING);
+}
+
 class App {
 public:
     explicit App(HINSTANCE instance) : instance_(instance) {}
@@ -297,6 +322,11 @@ private:
     int dpi() const;
     int seek_bar_height() const;
     void toggle_captions();
+    void generate_srt();
+    void load_srt();
+    void refresh_caption_menus();
+    void select_caption_model(UINT index);
+    void select_caption_language(UINT index);
     void sync_captions_media();
     void refresh_caption_osd(bool force_status);
     void cycle_yolo_mode();
@@ -316,6 +346,10 @@ private:
     HWND video_ = nullptr;
     HWND seek_bar_ = nullptr;
     HMENU context_menu_ = nullptr;
+    HMENU caption_model_menu_ = nullptr;
+    HMENU caption_lang_menu_ = nullptr;
+    std::vector<std::wstring> caption_model_ids_;
+    std::vector<std::wstring> caption_lang_ids_;
     Player player_;
     std::unique_ptr<CaptionWorker> captions_;
     std::unique_ptr<YoloWorker> yolo_;
@@ -723,6 +757,13 @@ void App::create_children() {
 
     HMENU overlay_menu = CreatePopupMenu();
     AppendMenuW(overlay_menu, MF_STRING, ID_CAPTIONS_TOGGLE, L"Auto Captions\ta");
+    caption_model_menu_ = CreatePopupMenu();
+    caption_lang_menu_ = CreatePopupMenu();
+    AppendMenuW(overlay_menu, MF_POPUP, reinterpret_cast<UINT_PTR>(caption_model_menu_), L"Whisper Model");
+    AppendMenuW(overlay_menu, MF_POPUP, reinterpret_cast<UINT_PTR>(caption_lang_menu_), L"Language");
+    AppendMenuW(overlay_menu, MF_STRING, ID_GENERATE_SRT, L"Generate SRT...");
+    AppendMenuW(overlay_menu, MF_STRING, ID_LOAD_SRT, L"Load SRT...");
+    AppendMenuW(overlay_menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(overlay_menu, MF_STRING, ID_YOLO_TOGGLE, L"YOLO26 Detect\ty");
     AppendMenuW(overlay_menu, MF_STRING, ID_LIGHTFC_TOGGLE, L"LightFC Track\tt");
 
@@ -744,11 +785,107 @@ void App::create_children() {
     DragAcceptFiles(hwnd_, TRUE);
 }
 
+void App::refresh_caption_menus() {
+    auto clear = [](HMENU menu) {
+        if (!menu)
+            return;
+        while (GetMenuItemCount(menu) > 0)
+            DeleteMenu(menu, 0, MF_BYPOSITION);
+    };
+    clear(caption_model_menu_);
+    clear(caption_lang_menu_);
+    caption_model_ids_.clear();
+    caption_lang_ids_.clear();
+    if (!captions_ || !caption_model_menu_ || !caption_lang_menu_)
+        return;
+
+    const std::vector<CaptionOption> models = captions_->models();
+    const std::wstring current_model = captions_->model_id();
+    if (models.empty()) {
+        AppendMenuW(caption_model_menu_, MF_STRING | MF_GRAYED, 0, L"(no ggml models)");
+    } else {
+        const size_t count = (std::min)(models.size(), static_cast<size_t>(ID_CAPTION_MODEL_LAST - ID_CAPTION_MODEL_FIRST + 1));
+        for (size_t i = 0; i < count; ++i) {
+            UINT flags = MF_STRING;
+            if (_wcsicmp(models[i].id.c_str(), current_model.c_str()) == 0)
+                flags |= MF_CHECKED;
+            AppendMenuW(caption_model_menu_, flags, ID_CAPTION_MODEL_FIRST + static_cast<UINT>(i),
+                        models[i].label.c_str());
+            caption_model_ids_.push_back(models[i].id);
+        }
+    }
+
+    std::vector<CaptionOption> languages = CaptionWorker::languages();
+    const std::wstring current_lang = captions_->language();
+    bool listed = false;
+    for (const CaptionOption& option : languages) {
+        if (_wcsicmp(option.id.c_str(), current_lang.c_str()) == 0)
+            listed = true;
+    }
+    if (!current_lang.empty() && !listed)
+        languages.push_back(CaptionOption{current_lang, current_lang});
+    const size_t lang_count =
+        (std::min)(languages.size(), static_cast<size_t>(ID_CAPTION_LANG_LAST - ID_CAPTION_LANG_FIRST + 1));
+    for (size_t i = 0; i < lang_count; ++i) {
+        UINT flags = MF_STRING;
+        if (_wcsicmp(languages[i].id.c_str(), current_lang.c_str()) == 0)
+            flags |= MF_CHECKED;
+        AppendMenuW(caption_lang_menu_, flags, ID_CAPTION_LANG_FIRST + static_cast<UINT>(i),
+                    languages[i].label.c_str());
+        caption_lang_ids_.push_back(languages[i].id);
+    }
+}
+
+void App::select_caption_model(UINT index) {
+    if (!captions_ || index >= caption_model_ids_.size())
+        return;
+    const std::wstring id = caption_model_ids_[index];
+    std::wstring label = id;
+    for (const CaptionOption& option : captions_->models()) {
+        if (_wcsicmp(option.id.c_str(), id.c_str()) == 0) {
+            label = option.label;
+            break;
+        }
+    }
+    if (!captions_->set_model(id)) {
+        ShowWhisperModelLoadHelp(hwnd_,
+            L"Model file is missing from the model directory (or could not be loaded).",
+            id);
+        player_.show_osd("Whisper model load failed", 1800);
+        return;
+    }
+    player_.show_osd(WideToUtf8(L"Whisper model: " + label), 1400);
+}
+
+void App::select_caption_language(UINT index) {
+    if (!captions_ || index >= caption_lang_ids_.size())
+        return;
+    const std::wstring id = caption_lang_ids_[index];
+    std::wstring label = id;
+    for (const CaptionOption& option : CaptionWorker::languages()) {
+        if (_wcsicmp(option.id.c_str(), id.c_str()) == 0) {
+            label = option.label;
+            break;
+        }
+    }
+    captions_->set_language(id);
+    player_.show_osd(WideToUtf8(L"Caption language: " + label), 1400);
+}
+
 void App::show_context_menu(int screen_x, int screen_y) {
     if (!context_menu_ || !hwnd_)
         return;
+    refresh_caption_menus();
     CheckMenuItem(context_menu_, ID_CAPTIONS_TOGGLE,
                   MF_BYCOMMAND | ((captions_ && captions_->enabled()) ? MF_CHECKED : MF_UNCHECKED));
+    {
+        const bool can_srt = captions_ && !captions_->srt_busy() && player_.state().has_media;
+        EnableMenuItem(context_menu_, ID_GENERATE_SRT,
+                       MF_BYCOMMAND | (can_srt ? MF_ENABLED : MF_GRAYED));
+        const bool can_load = player_.state().has_media;
+        EnableMenuItem(context_menu_, ID_LOAD_SRT,
+                       MF_BYCOMMAND | (can_load ? MF_ENABLED : MF_GRAYED));
+    }
     CheckMenuItem(context_menu_, ID_YOLO_TOGGLE,
                   MF_BYCOMMAND | ((yolo_ && yolo_->enabled()) ? MF_CHECKED : MF_UNCHECKED));
     CheckMenuItem(context_menu_, ID_LIGHTFC_TOGGLE,
@@ -1306,6 +1443,83 @@ void App::toggle_captions() {
     }
 }
 
+void App::generate_srt() {
+    if (!captions_)
+        return;
+    sync_captions_media();
+    std::wstring error;
+    if (!captions_->request_generate_srt(&error)) {
+        MessageBoxW(hwnd_, error.empty() ? L"Cannot start Generate SRT." : error.c_str(),
+                    L"upPlayer - Generate SRT", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    player_.show_osd("Generating SRT...", 2000);
+}
+
+
+void App::load_srt() {
+    if (!player_.state().has_media) {
+        MessageBoxW(hwnd_, L"Open a video first.", L"upPlayer - Load SRT",
+                    MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    std::vector<wchar_t> buffer(32768, L'\0');
+    std::wstring initial_dir;
+    const std::wstring media = player_.current_path();
+    // Local/UNC paths (not http/rtsp): seed dialog dir + sidecar <media>.srt.
+    const bool file_like = !media.empty() && media.find(L"://") == std::wstring::npos;
+    if (file_like) {
+        const auto slash = media.find_last_of(L"\\/");
+        if (slash != std::wstring::npos)
+            initial_dir = media.substr(0, slash);
+
+        std::wstring sidecar = media;
+        const auto dot = sidecar.find_last_of(L'.');
+        const auto slash2 = sidecar.find_last_of(L"\\/");
+        if (dot != std::wstring::npos && (slash2 == std::wstring::npos || dot > slash2))
+            sidecar = sidecar.substr(0, dot) + L".srt";
+        else
+            sidecar += L".srt";
+        if (GetFileAttributesW(sidecar.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            const auto name_slash = sidecar.find_last_of(L"\\/");
+            const std::wstring name =
+                name_slash == std::wstring::npos ? sidecar : sidecar.substr(name_slash + 1);
+            wcsncpy_s(buffer.data(), buffer.size(), name.c_str(), _TRUNCATE);
+        }
+    }
+
+    OPENFILENAMEW dialog{};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = hwnd_;
+    dialog.lpstrFilter =
+        L"Subtitle files\0*.srt;*.ass;*.ssa;*.vtt;*.sub\0"
+        L"SRT\0*.srt\0"
+        L"All files\0*.*\0";
+    dialog.lpstrFile = buffer.data();
+    dialog.nMaxFile = static_cast<DWORD>(buffer.size());
+    dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_NOCHANGEDIR;
+    dialog.lpstrTitle = L"Load SRT";
+    dialog.lpstrDefExt = L"srt";
+    if (!initial_dir.empty())
+        dialog.lpstrInitialDir = initial_dir.c_str();
+    if (!GetOpenFileNameW(&dialog))
+        return;
+
+    const std::wstring path = buffer.data();
+    std::wstring error;
+    if (!player_.add_external_subtitle(path, &error)) {
+        MessageBoxW(hwnd_, error.empty() ? L"Failed to load subtitle." : error.c_str(),
+                    L"upPlayer - Load SRT", MB_OK | MB_ICONWARNING);
+        return;
+    }
+
+    const auto slash = path.find_last_of(L"\\/");
+    const std::wstring name = slash == std::wstring::npos ? path : path.substr(slash + 1);
+    player_.show_osd(WideToUtf8(L"Loaded: " + name), 1600);
+}
+
+
 void App::set_yolo_mode(YoloMode mode) {
     if (!yolo_)
         return;
@@ -1537,7 +1751,12 @@ void App::refresh_caption_osd(bool force_status) {
     const std::wstring status = captions_->status_text();
     if (!status.empty() && now - last_caption_osd_tick_ > 1500) {
         last_caption_osd_tick_ = now;
-        player_.show_osd(WideToUtf8(status), 1500);
+        std::wstring osd = status;
+        if (osd.rfind(L"missing:", 0) == 0)
+            osd = L"Whisper model missing - see dialog for download URL";
+        else if (osd.rfind(L"server:", 0) == 0)
+            osd = L"Whisper server failed — see dialog";
+        player_.show_osd(WideToUtf8(osd), 1500);
     }
 }
 
@@ -1693,8 +1912,17 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
         show_context_menu(pt.x, pt.y);
         return 0;
     }
-    case WM_COMMAND:
-        switch (LOWORD(wparam)) {
+    case WM_COMMAND: {
+        const UINT cmd = LOWORD(wparam);
+        if (cmd >= ID_CAPTION_MODEL_FIRST && cmd <= ID_CAPTION_MODEL_LAST) {
+            select_caption_model(cmd - ID_CAPTION_MODEL_FIRST);
+            return 0;
+        }
+        if (cmd >= ID_CAPTION_LANG_FIRST && cmd <= ID_CAPTION_LANG_LAST) {
+            select_caption_language(cmd - ID_CAPTION_LANG_FIRST);
+            return 0;
+        }
+        switch (cmd) {
         case ID_FILE_OPEN:
             open_file();
             return 0;
@@ -1795,6 +2023,12 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
         case ID_CAPTIONS_TOGGLE:
             toggle_captions();
             return 0;
+        case ID_GENERATE_SRT:
+            generate_srt();
+            return 0;
+        case ID_LOAD_SRT:
+            load_srt();
+            return 0;
         case ID_YOLO_TOGGLE:
             cycle_yolo_mode();
             return 0;
@@ -1805,9 +2039,77 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
             break;
         }
         break;
-    case CaptionWorker::WM_CAPTION_UPDATE:
+    }
+    case CaptionWorker::WM_CAPTION_UPDATE: {
         refresh_caption_osd(true);
+        if (captions_ && captions_->enabled()) {
+            const std::wstring status = captions_->status_text();
+            // Tagged missing:/server: errors from WhisperRuntime — show a one-shot help popup.
+            if (status.rfind(L"missing:", 0) == 0 || status.find(L"No Whisper model") != std::wstring::npos ||
+                status.find(L"Whisper model missing") != std::wstring::npos ||
+                status.find(L"place a ggml") != std::wstring::npos) {
+                static std::wstring last_help;
+                if (status != last_help) {
+                    last_help = status;
+                    std::wstring expected = L"ggml-base.bin";
+                    std::wstring reason = L"No usable ggml model was found.";
+                    if (status.rfind(L"missing:", 0) == 0) {
+                        // missing:filename|dir|url  OR missing:filename
+                        const std::wstring payload = status.substr(8);
+                        const size_t bar = payload.find(L'|');
+                        expected = bar == std::wstring::npos ? payload : payload.substr(0, bar);
+                        reason = L"Model file is missing from the model directory.";
+                    }
+                    ShowWhisperModelLoadHelp(hwnd_, reason, expected);
+                }
+            } else if (status.rfind(L"server:", 0) == 0) {
+                static std::wstring last_server_help;
+                if (status != last_server_help) {
+                    last_server_help = status;
+                    ShowWhisperModelLoadHelp(hwnd_, status.substr(7), captions_->model_id());
+                }
+            }
+        }
         return 0;
+    }
+
+    case CaptionWorker::WM_SRT_DONE: {
+        if (!captions_)
+            return 0;
+        const WPARAM code = wparam;
+        const std::wstring status = captions_->srt_status();
+        if (code == 1) {
+            const std::wstring path = captions_->last_srt_path();
+            player_.show_osd("SRT saved", 1800);
+            std::wstring body = L"Subtitle file saved:\r\n\r\n";
+            body += path.empty() ? status : path;
+            MessageBoxW(hwnd_, body.c_str(), L"upPlayer - Generate SRT", MB_OK | MB_ICONINFORMATION);
+        } else if (code == 2) {
+            if (status.rfind(L"missing:", 0) == 0 ||
+                status.find(L"Whisper model missing") != std::wstring::npos ||
+                status.find(L"No Whisper model") != std::wstring::npos) {
+                std::wstring expected = captions_->model_id();
+                std::wstring reason = L"No usable ggml model was found.";
+                if (status.rfind(L"missing:", 0) == 0) {
+                    const size_t pipe = status.find(L'|', 8);
+                    expected = (pipe == std::wstring::npos) ? status.substr(8)
+                                                            : status.substr(8, pipe - 8);
+                    reason = L"Model file is missing from the model directory.";
+                }
+                ShowWhisperModelLoadHelp(hwnd_, reason, expected);
+            } else {
+                MessageBoxW(hwnd_, status.empty() ? L"Generate SRT failed." : status.c_str(),
+                            L"upPlayer - Generate SRT", MB_OK | MB_ICONWARNING);
+            }
+            player_.show_osd("SRT failed", 1600);
+        } else if (!status.empty()) {
+            std::string osd = WideToUtf8(status);
+            if (osd.size() > 80)
+                osd = osd.substr(0, 77) + "...";
+            player_.show_osd(osd, 1500);
+        }
+        return 0;
+    }
     case YoloWorker::WM_YOLO_UPDATE:
         refresh_yolo_osd();
         return 0;

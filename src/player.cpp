@@ -1665,6 +1665,35 @@ PlayerState Player::state() const {
     return state_;
 }
 
+bool Player::add_external_subtitle(const std::wstring& path, std::wstring* error) {
+    if (path.empty()) {
+        if (error)
+            *error = L"No subtitle path.";
+        return false;
+    }
+    if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        if (error)
+            *error = L"Subtitle file not found:\r\n" + path;
+        return false;
+    }
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (!state_.has_media) {
+            if (error)
+                *error = L"Open a video first.";
+            return false;
+        }
+    }
+    const std::string utf8 = WideToUtf8(path);
+    if (!exec({"sub-add", utf8, "select"}, error)) {
+        if (error && error->empty())
+            *error = L"mpv failed to add the subtitle (sub-add).";
+        return false;
+    }
+    post({"set", "sub-visibility", "yes"});
+    return true;
+}
+
 std::wstring Player::current_path() const {
     std::lock_guard<std::mutex> lock(mu_);
     return Utf8ToWide(current_utf8_);

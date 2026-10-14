@@ -1,9 +1,23 @@
 # Changelog
 
+## 0.6.3
+
+- Overlay: Load SRT... - pick an external subtitle (.srt and common types) for the current video via mpv sub-add; dialog opens in the media folder and pre-fills sidecar <media>.srt when present
+
+## 0.6.2
+
+- Overlay: Generate SRT - offline full-file transcription with the selected Whisper Model + Language; writes .srt next to the media (UTF-8); progress via OSD; model-missing dialog reused
+
+## 0.6.1
+
+- Whisper Model: if the chosen ggml file is missing or fails to load, show a MessageBox with the model directory and Hugging Face download URL (same source as fetch-whisper-deps.ps1); no silent fallback without telling the user
+- Whisper Model menu lists common ggml sizes even when not downloaded yet (marked download)
+
 ## 0.6.0
 
 - Auto captions use MIT whisper.cpp with a warm whisper-server (no per-chunk process spawn)
 - Releases package the open whisper CLI and model; PotPlayer Whisper is no longer shipped
+- Overlay menu: pick any ggml model under the whisper models folders, and a caption language (including Auto). Both choices are remembered; changing the model restarts whisper-server
 
 ## 0.5.1
 
