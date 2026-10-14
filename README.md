@@ -119,7 +119,7 @@ Press **t** to arm, then click the object on the video. LightFC tracks with a cy
 Press **a** to toggle live captions. Right-click → **Overlay** → **Whisper Model** / **Language** to pick a ggml model (anything `ggml-*.bin` under the whisper models folders) and a language, including **Auto**. Both choices are remembered; switching the model restarts whisper-server. Captions use MIT [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (not PotPlayer libraries):
 
 ```powershell
-.\scripts\fetch-whisper-deps.ps1   # Vulkan whisper-cli + ggml-base.bin → third_party\whisper-win\
+.\scripts\fetch-whisper-deps.ps1   # Vulkan whisper-cli + ggml-tiny.bin → third_party\whisper-win\
 ```
 
 Requires `mpv.exe` on `PATH` (or next to `upPlayer.exe`) to extract audio chunks. See [NOTICE](NOTICE).

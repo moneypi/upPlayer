@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.5
+
+- Whisper model-missing dialog is copyable; no fetch-script mention
+
+## 0.6.4
+
+- Default Whisper model is ggml-tiny; release packages tiny instead of base for a smaller installer
+
 ## 0.6.3
 
 - Overlay: Load SRT... - pick an external subtitle (.srt and common types) for the current video via mpv sub-add; dialog opens in the media folder and pre-fills sidecar <media>.srt when present

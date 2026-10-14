@@ -1,4 +1,4 @@
-# Download MIT-licensed whisper.cpp Windows CLI + ggml-base model.
+# Download MIT-licensed whisper.cpp Windows CLI + ggml-tiny model.
 # Prefers a Vulkan build (GPU) for live captions; falls back to official CPU zip.
 param(
     [string]$ReleaseTag = "v1.8.5",
@@ -126,10 +126,10 @@ if (-not $haveCli -or ($CpuOnly -and -not (Test-Path (Join-Path $WhisperDir "whi
 }
 
 if (-not $SkipModel) {
-    $model = Join-Path $ModelDir "ggml-base.bin"
+    $model = Join-Path $ModelDir "ggml-tiny.bin"
     if (-not (Test-Path $model) -or ((Get-Item $model).Length -lt 1MB)) {
-        $modelUrl = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin"
-        Download-File $modelUrl $model "ggml-base.bin" 1MB
+        $modelUrl = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin"
+        Download-File $modelUrl $model "ggml-tiny.bin" 1MB
     }
     Write-Host "Model: $model"
 }
