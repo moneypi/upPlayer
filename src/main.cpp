@@ -250,7 +250,7 @@ INT_PTR CALLBACK UrlDlgProc(HWND dialog, UINT message, WPARAM wparam, LPARAM lpa
 
 void ShowWhisperModelLoadHelp(HWND owner, const std::wstring& reason, const std::wstring& expected_filename) {
     WhisperRuntime whisper;
-    const std::wstring filename = expected_filename.empty() ? L"ggml-base.bin" : expected_filename;
+    const std::wstring filename = expected_filename.empty() ? L"ggml-tiny.bin" : expected_filename;
     const std::wstring dir = whisper.primary_models_dir();
     const std::wstring url = WhisperRuntime::download_url_for_model(filename);
     std::wstring body;
@@ -2051,7 +2051,7 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
                 static std::wstring last_help;
                 if (status != last_help) {
                     last_help = status;
-                    std::wstring expected = L"ggml-base.bin";
+                    std::wstring expected = L"ggml-tiny.bin";
                     std::wstring reason = L"No usable ggml model was found.";
                     if (status.rfind(L"missing:", 0) == 0) {
                         // missing:filename|dir|url  OR missing:filename
