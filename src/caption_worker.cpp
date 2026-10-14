@@ -630,7 +630,7 @@ void CaptionWorker::thread_main() {
                 std::lock_guard<std::mutex> lock(mu_);
                 status_ = CaptionStatus::Error;
                 // Keep tagged missing:/server: prefix so the UI can open a help MessageBox.
-                status_text_ = err.empty() ? L"missing:ggml-base.bin" : err;
+                status_text_ = err.empty() ? L"missing:ggml-tiny.bin" : err;
             }
             if (notify_)
                 PostMessageW(notify_, WM_CAPTION_UPDATE, 0, 0);

@@ -303,11 +303,11 @@ std::wstring PreferredModelPath(const std::vector<WhisperModel>& models, const s
         }
     }
     const wchar_t* fallback[] = {
+        L"ggml-tiny.bin",
         L"ggml-base.bin",
         L"ggml-small.bin",
         L"ggml-medium.bin",
         L"ggml-large-v3.bin",
-        L"ggml-tiny.bin",
     };
     for (const wchar_t* name : fallback) {
         for (const WhisperModel& model : models) {
@@ -766,9 +766,9 @@ std::wstring WhisperRuntime::primary_models_dir() const {
 }
 
 std::wstring WhisperRuntime::download_url_for_model(const std::wstring& filename) {
-    std::wstring name = filename.empty() ? L"ggml-base.bin" : FileNameOf(filename);
+    std::wstring name = filename.empty() ? L"ggml-tiny.bin" : FileNameOf(filename);
     if (name.empty())
-        name = L"ggml-base.bin";
+        name = L"ggml-tiny.bin";
     // Same source as scripts/fetch-whisper-deps.ps1
     return L"https://huggingface.co/ggerganov/whisper.cpp/resolve/main/" + name;
 }
@@ -898,7 +898,7 @@ bool WhisperRuntime::ensure_model(const ProgressFn& progress) {
     }
     if (!model_path().empty())
         return true;
-    std::wstring expected = L"ggml-base.bin";
+    std::wstring expected = L"ggml-tiny.bin";
     {
         std::lock_guard<std::mutex> lock(mu_);
         load_settings();
