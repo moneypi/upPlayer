@@ -1,8 +1,9 @@
-# Push tag and publish GitHub release with versioned setup exe.
+# Push tag and publish GitHub release with AI and no-AI setup installers.
 # Requires: gh auth login   OR   $env:GITHUB_TOKEN / $env:GH_TOKEN
 param(
     [string]$Version = "",
-    [string]$SetupPath = "",
+    [string]$AiSetupPath = "",
+    [string]$NoAiSetupPath = "",
     [switch]$SkipPush
 )
 
@@ -23,19 +24,23 @@ if (-not $Version) {
 }
 $Tag = "v$Version"
 $OutDir = Join-Path $Root "build\dist"
-$versioned = Join-Path $OutDir "upPlayer-Setup-x64-$Version.exe"
-if (-not $SetupPath) {
-    $SetupPath = $versioned
-    if (-not (Test-Path $SetupPath)) {
-        $legacy = Join-Path $OutDir "upPlayer-Setup-x64.exe"
-        if (Test-Path $legacy) { $SetupPath = $legacy }
-    }
+$aiVersioned = Join-Path $OutDir "upPlayer-Setup-x64-$Version-AI.exe"
+$noAiVersioned = Join-Path $OutDir "upPlayer-Setup-x64-$Version-noAI.exe"
+
+if (-not $AiSetupPath) { $AiSetupPath = $aiVersioned }
+if (-not $NoAiSetupPath) { $NoAiSetupPath = $noAiVersioned }
+
+if (-not (Test-Path $AiSetupPath)) {
+    throw "Missing AI setup: $AiSetupPath. Run scripts\package-both.ps1 first."
 }
-if (-not (Test-Path $SetupPath)) {
-    throw "Missing setup: $SetupPath. Run scripts\package-setup.ps1 first."
+if (-not (Test-Path $NoAiSetupPath)) {
+    throw "Missing no-AI setup: $NoAiSetupPath. Run scripts\package-both.ps1 first."
 }
-if ($SetupPath -ne $versioned) {
-    Copy-Item $SetupPath $versioned -Force
+if ($AiSetupPath -ne $aiVersioned) {
+    Copy-Item $AiSetupPath $aiVersioned -Force
+}
+if ($NoAiSetupPath -ne $noAiVersioned) {
+    Copy-Item $NoAiSetupPath $noAiVersioned -Force
 }
 
 $changelog = Join-Path $Root "CHANGELOG.md"
@@ -53,15 +58,18 @@ if (-not $notesBody) {
 $notes = @"
 ## upPlayer $Tag
 
-Windows setup installer (choose folder; Finish / Start). Default: ``C:\Program Files\upPlayer``.
+Two Windows setup installers (choose folder; Finish / Start). Default: ``C:\Program Files\upPlayer``.
+
+| Installer | Contents |
+|-----------|----------|
+| ``upPlayer-Setup-x64-$Version-AI.exe`` | Player + mpv + Whisper + YOLO26 + LightFC |
+| ``upPlayer-Setup-x64-$Version-noAI.exe`` | Player + mpv only (smaller) |
 
 ### Changes
 $notesBody
 
 ### Install
-Run ``upPlayer-Setup-x64-$Version.exe`` (admin / UAC).
-
-Auto captions use MIT whisper.cpp (`whisper\` next to the app) when packaged; see NOTICE.
+Run either setup (admin / UAC). The AI menu appears only in the AI build.
 "@
 
 if (-not $SkipPush) {
@@ -70,10 +78,11 @@ if (-not $SkipPush) {
     git -C $Root push origin $Tag
 }
 
+$assets = @($aiVersioned, $noAiVersioned)
 $gh = Get-Command gh -ErrorAction SilentlyContinue
 if ($gh) {
     Write-Host "Creating GitHub release with gh..."
-    & gh release create $Tag $versioned `
+    & gh release create $Tag @assets `
         --repo moneypi/upPlayer `
         --title "upPlayer $Tag" `
         --notes $notes `
@@ -112,12 +121,15 @@ $release = Invoke-RestMethod -Method Post `
     -ContentType "application/json" `
     -Body $releaseBody
 
-$uploadUrl = $release.upload_url -replace '\{\?name,label\}', "?name=upPlayer-Setup-x64-$Version.exe"
-$fileBytes = [IO.File]::ReadAllBytes($versioned)
-Invoke-RestMethod -Method Post `
-    -Uri $uploadUrl `
-    -Headers $headers `
-    -ContentType "application/octet-stream" `
-    -Body $fileBytes | Out-Null
+foreach ($asset in $assets) {
+    $name = Split-Path $asset -Leaf
+    $uploadUrl = $release.upload_url -replace '\{\?name,label\}', "?name=$name"
+    $fileBytes = [IO.File]::ReadAllBytes($asset)
+    Invoke-RestMethod -Method Post `
+        -Uri $uploadUrl `
+        -Headers $headers `
+        -ContentType "application/octet-stream" `
+        -Body $fileBytes | Out-Null
+}
 
 Write-Host "Published: $($release.html_url)"

@@ -9,6 +9,8 @@
 #include <cstdlib>
 #include <cstring>
 
+std::string MenuTextUtf8(const wchar_t* english);
+
 namespace {
 
 std::wstring Utf8ToWide(const std::string& text) {
@@ -236,6 +238,99 @@ std::string JsonGetString(const std::string& json, const char* key) {
     if (!JsonGet(json, key, value) || value.kind != JsonKind::String)
         return {};
     return value.text;
+}
+
+std::string SliceJson(const std::string& json, size_t& index) {
+    SkipWs(json, index);
+    if (index >= json.size())
+        return {};
+    const char open = json[index];
+    if (open != '{' && open != '[')
+        return {};
+    const char close = open == '{' ? '}' : ']';
+    int depth = 0;
+    bool in_string = false;
+    bool escape = false;
+    const size_t start = index;
+    for (; index < json.size(); ++index) {
+        const char c = json[index];
+        if (in_string) {
+            if (escape)
+                escape = false;
+            else if (c == '\\')
+                escape = true;
+            else if (c == '"')
+                in_string = false;
+            continue;
+        }
+        if (c == '"') {
+            in_string = true;
+            continue;
+        }
+        if (c == open)
+            ++depth;
+        else if (c == close) {
+            --depth;
+            if (depth == 0) {
+                ++index;
+                return json.substr(start, index - start);
+            }
+        }
+    }
+    return {};
+}
+
+std::string JsonRaw(const std::string& json, const char* key) {
+    size_t pos = FindKey(json, key);
+    if (pos == std::string::npos)
+        return {};
+    return SliceJson(json, pos);
+}
+
+std::vector<MediaTrack> ParseMediaTracks(const std::string& json) {
+    std::vector<MediaTrack> tracks;
+    size_t index = 0;
+    SkipWs(json, index);
+    if (index >= json.size() || json[index] != '[')
+        return tracks;
+    ++index;
+    while (index < json.size()) {
+        SkipWs(json, index);
+        if (index >= json.size() || json[index] == ']')
+            break;
+        if (json[index] != '{')
+            break;
+        const std::string object = SliceJson(json, index);
+        if (object.empty())
+            break;
+        JsonValue type;
+        JsonValue id;
+        if (!JsonGet(object, "type", type) || type.kind != JsonKind::String ||
+            !JsonGet(object, "id", id) || id.kind != JsonKind::Number)
+            continue;
+        if (type.text != "audio" && type.text != "sub")
+            continue;
+        MediaTrack track;
+        track.id = static_cast<int>(id.number);
+        track.type = Utf8ToWide(type.text);
+        JsonValue selected;
+        if (JsonGet(object, "selected", selected) && selected.kind == JsonKind::Bool)
+            track.selected = selected.boolean;
+        JsonValue external;
+        if (JsonGet(object, "external", external) && external.kind == JsonKind::Bool)
+            track.external = external.boolean;
+        JsonValue title;
+        if (JsonGet(object, "title", title) && title.kind == JsonKind::String)
+            track.title = Utf8ToWide(title.text);
+        JsonValue lang;
+        if (JsonGet(object, "lang", lang) && lang.kind == JsonKind::String)
+            track.lang = Utf8ToWide(lang.text);
+        tracks.push_back(std::move(track));
+        SkipWs(json, index);
+        if (index < json.size() && json[index] == ',')
+            ++index;
+    }
+    return tracks;
 }
 
 std::wstring ExeDirectory() {
@@ -496,7 +591,7 @@ bool Player::start_libmpv(HWND video, std::wstring& error) {
     if (!screenshot_dir_.empty())
         option_string("screenshot-directory", WideToUtf8(screenshot_dir_).c_str());
     option_string("screenshot-template", "upPlayer-%F-%n");
-    option_string("screenshot-format", "jpg");
+    option_string("screenshot-format", screenshot_format_ == "png" ? "png" : "jpg");
 
     int64_t wid = static_cast<int64_t>(reinterpret_cast<intptr_t>(video));
     int rc = api_->set_option(ctx, "wid", MPV_FORMAT_INT64, &wid);
@@ -577,7 +672,8 @@ bool Player::start_exe(HWND video, std::wstring& error, bool live_mode,
     cmd += L" --input-vo-keyboard=no --input-cursor=yes";
     if (!screenshot_dir_.empty())
         cmd += L" --screenshot-directory=" + QuoteArg(screenshot_dir_);
-    cmd += L" --screenshot-template=upPlayer-%F-%n --screenshot-format=jpg";
+    cmd += L" --screenshot-template=upPlayer-%F-%n --screenshot-format=";
+    cmd += screenshot_format_ == "png" ? L"png" : L"jpg";
     if (live_mode) {
         cmd += L" --profile=low-latency --untimed --keep-open=yes";
         if (initial_url.empty())
@@ -911,7 +1007,7 @@ void Player::handle_ipc_line(const std::string& line) {
     std::string error = JsonGetString(line, "error");
     if (error.empty())
         error = "success";
-    resolve_wait(static_cast<int>(id.number), error);
+    resolve_wait(static_cast<int>(id.number), error, JsonRaw(line, "data"));
 }
 
 bool Player::load(const std::wstring& target, double resume_at) {
@@ -1148,6 +1244,36 @@ void Player::set_mute(bool muted) {
     set_mute_state(muted);
 }
 
+void Player::set_screenshot_format(const std::string& format) {
+    screenshot_format_ = format == "png" ? "png" : "jpg";
+    if (running_.load())
+        post({"set_property", "screenshot-format", screenshot_format_});
+}
+
+std::vector<MediaTrack> Player::media_tracks() {
+    std::string json;
+    if (!backend_exe_ && ctx_ && api_ && api_->get_property_string && api_->free_fn) {
+        char* text = api_->get_property_string(static_cast<mpv_handle*>(ctx_), "track-list");
+        if (!text)
+            return {};
+        json = text;
+        api_->free_fn(text);
+    } else if (!query({"get_property", "track-list"}, json, 500)) {
+        return {};
+    }
+    return ParseMediaTracks(json);
+}
+
+void Player::select_track(const std::string& property, int id) {
+    if (id <= 0 || (property != "aid" && property != "sid"))
+        return;
+    post({"set_property", property, std::to_string(id)});
+}
+
+void Player::disable_subtitles() {
+    post({"set_property", "sid", "no"});
+}
+
 void Player::set_screenshot_directory(const std::wstring& path) {
     std::wstring dir = path;
     while (!dir.empty() && (dir.back() == L'\\' || dir.back() == L'/'))
@@ -1164,9 +1290,9 @@ void Player::take_snapshot() {
     const auto slash = leaf.find_last_of(L"\\/");
     if (slash != std::wstring::npos)
         leaf = leaf.substr(slash + 1);
-    std::string message = "Snapshot saved";
+    std::string message = MenuTextUtf8(leaf.empty() ? L"Snapshot saved" : L"Snapshot saved to ");
     if (!leaf.empty())
-        message += " to " + WideToUtf8(leaf);
+        message += WideToUtf8(leaf);
     show_osd(message, 1400);
 }
 
@@ -1291,16 +1417,16 @@ void Player::toggle_mute() {
     }
     set_mute_state(muted);
     if (muted) {
-        post({"show-text", "Mute", "800"});
+        show_osd(MenuTextUtf8(L"Mute"), 800);
     } else {
-        char osd[64];
         double volume = 100.0;
         {
             std::lock_guard<std::mutex> lock(mu_);
             volume = state_.volume;
         }
-        snprintf(osd, sizeof(osd), "Volume: %.0f%%", volume);
-        post({"show-text", osd, "800"});
+        char amount[32];
+        snprintf(amount, sizeof(amount), "%.0f%%", volume);
+        show_osd(MenuTextUtf8(L"Volume: ") + amount, 800);
     }
 }
 
@@ -1333,9 +1459,9 @@ void Player::apply_volume(double volume, bool show_osd) {
         }
     }
     if (show_osd) {
-        char osd[64];
-        snprintf(osd, sizeof(osd), "Volume: %.0f%%", volume);
-        post({"show-text", osd, "800"});
+        char amount[32];
+        snprintf(amount, sizeof(amount), "%.0f%%", volume);
+        Player::show_osd(MenuTextUtf8(L"Volume: ") + amount, 800);
     }
     set_volume_state(volume);
 }
@@ -1442,16 +1568,33 @@ bool Player::begin_wait(int id) {
     pending_id_ = id;
     pending_done_ = false;
     pending_result_.clear();
+    pending_data_.clear();
     return true;
 }
 
-void Player::resolve_wait(int id, const std::string& error) {
+void Player::resolve_wait(int id, const std::string& error, const std::string& data) {
     std::lock_guard<std::mutex> lock(wait_mu_);
     if (pending_done_ || id != pending_id_)
         return;
     pending_result_ = error;
+    pending_data_ = data;
     pending_done_ = true;
     wait_cv_.notify_one();
+}
+
+bool Player::query(const std::vector<std::string>& args, std::string& data, int timeout_ms) {
+    if (!running_.load() || !backend_exe_)
+        return false;
+    const int id = next_id_++;
+    begin_wait(id);
+    if (!write_line(BuildCommand(args, id)))
+        return false;
+    std::string result;
+    if (!wait_pending(timeout_ms, result))
+        return false;
+    std::lock_guard<std::mutex> lock(wait_mu_);
+    data = pending_data_;
+    return true;
 }
 
 bool Player::wait_pending(int timeout_ms, std::string& error) {

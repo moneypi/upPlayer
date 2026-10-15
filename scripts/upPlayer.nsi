@@ -15,6 +15,9 @@
 !ifndef APP_VERSION
   !define APP_VERSION "1.0.0"
 !endif
+!ifndef SETUP_SUFFIX
+  !define SETUP_SUFFIX ""
+!endif
 
 !define APP_NAME "upPlayer"
 !define APP_PUBLISHER "upPlayer"
@@ -28,7 +31,7 @@ SetCompressor /SOLID lzma
 SetCompressorDictSize 64
 
 Name "${APP_NAME} ${APP_VERSION}"
-OutFile "${OUT_DIR}\upPlayer-Setup-x64-${APP_VERSION}.exe"
+OutFile "${OUT_DIR}\upPlayer-Setup-x64-${APP_VERSION}${SETUP_SUFFIX}.exe"
 InstallDir "$PROGRAMFILES64\${APP_NAME}"
 InstallDirRegKey HKLM "Software\${APP_NAME}" "InstallLocation"
 ShowInstDetails show

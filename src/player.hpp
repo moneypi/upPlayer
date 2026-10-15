@@ -10,6 +10,15 @@
 #include <thread>
 #include <vector>
 
+struct MediaTrack {
+    int id = 0;
+    std::wstring type;
+    bool selected = false;
+    bool external = false;
+    std::wstring title;
+    std::wstring lang;
+};
+
 struct PlayerState {
     std::wstring title;
     std::wstring last_error;
@@ -64,6 +73,10 @@ public:
     void toggle_mute();
     void take_snapshot();
     void set_screenshot_directory(const std::wstring& path);
+    void set_screenshot_format(const std::string& format);
+    std::vector<MediaTrack> media_tracks();
+    void select_track(const std::string& property, int id);
+    void disable_subtitles();
     void show_osd(const std::string& text, int duration_ms = 1200);
     // PotPlayer-like bottom caption (ASS overlay); empty text clears it.
     void show_caption(const std::string& text);
@@ -136,7 +149,8 @@ private:
     void notify();
 
     bool begin_wait(int id);
-    void resolve_wait(int id, const std::string& error);
+    void resolve_wait(int id, const std::string& error, const std::string& data = {});
+    bool query(const std::vector<std::string>& args, std::string& data, int timeout_ms);
     bool wait_pending(int timeout_ms, std::string& error);
 
     Api* api_ = nullptr;
@@ -161,6 +175,7 @@ private:
     std::wstring pipe_name_;
     std::wstring log_path_;
     std::wstring screenshot_dir_;
+    std::string screenshot_format_ = "jpg";
     std::thread reader_;
     std::thread writer_;
     std::deque<std::string> write_queue_;
@@ -180,6 +195,7 @@ private:
     int pending_id_ = 0;
     bool pending_done_ = false;
     std::string pending_result_;
+    std::string pending_data_;
 
     std::wstring backend_label_;
     std::wstring start_error_;

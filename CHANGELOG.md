@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.7
+
+- Menu language (English / 中文); on-screen messages follow the menu language
+- Settings polish; snapshot format JPEG or PNG
+- Audio track menu (when 2+ tracks) and embedded subtitle list with Off
+- Live label on the seek bar; Always on Top pin on the title bar
+- Two installers: **AI** (Whisper / YOLO / LightFC) and **noAI** (player + mpv only)
+
 ## 0.6.6
 
 - Hide commands that need a video; Speed, Volume, Play/Pause, and Clip titles follow the current state

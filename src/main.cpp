@@ -30,10 +30,23 @@
 namespace {
 
 constexpr int kTimerStatus = 1;
+constexpr int kTimerPin = 2;
 constexpr int kSeekBarId = 3001;
 
 #ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
 #define DWMWA_USE_IMMERSIVE_DARK_MODE 20
+#endif
+#ifndef DWMWA_CAPTION_BUTTON_BOUNDS
+#define DWMWA_CAPTION_BUTTON_BOUNDS 5
+#endif
+#ifndef DWMWA_CAPTION_COLOR
+#define DWMWA_CAPTION_COLOR 35
+#endif
+#ifndef DWMWA_COLOR_DEFAULT
+#define DWMWA_COLOR_DEFAULT 0xFFFFFFFF
+#endif
+#ifndef DWMWA_COLOR_NONE
+#define DWMWA_COLOR_NONE 0xFFFFFFFE
 #endif
 
 std::wstring Trim(std::wstring text) {
@@ -430,6 +443,199 @@ void SaveAppRegString(const wchar_t* name, const std::wstring& value) {
     RegCloseKey(key);
 }
 
+enum class MenuLanguage { English, Chinese };
+
+MenuLanguage g_menu_language = MenuLanguage::English;
+
+void LoadMenuLanguage() {
+    g_menu_language = LoadAppRegString(L"MenuLanguage") == L"zh" ? MenuLanguage::Chinese
+                                                                 : MenuLanguage::English;
+}
+
+const wchar_t* Tr(const wchar_t* english) {
+    if (g_menu_language != MenuLanguage::Chinese || !english)
+        return english;
+    struct Pair {
+        const wchar_t* en;
+        const wchar_t* zh;
+    };
+    static const Pair kText[] = {
+        {L"Open...\tCtrl+O", L"打开...\tCtrl+O"},
+        {L"Open Network Address...\tCtrl+U", L"打开网络地址...\tCtrl+U"},
+        {L"Take Snapshot\ts", L"截图\ts"},
+        {L"Subtitle", L"字幕"},
+        {L"Load Subtitle...", L"加载字幕..."},
+        {L"Unload Subtitle", L"卸载字幕"},
+        {L"Playback", L"播放"},
+        {L"Play/Pause\tSpace", L"播放/暂停\tSpace"},
+        {L"Play\tSpace", L"播放\tSpace"},
+        {L"Pause\tSpace", L"暂停\tSpace"},
+        {L"Stop", L"停止"},
+        {L"Seek -5s\tLeft", L"后退 5 秒\tLeft"},
+        {L"Seek +5s\tRight", L"前进 5 秒\tRight"},
+        {L"Frame Back\t,", L"上一帧\t,"},
+        {L"Frame Forward\t.", L"下一帧\t."},
+        {L"Stats\ti", L"统计\ti"},
+        {L"Stats Toggle\tI", L"开关统计\tI"},
+        {L"Speed", L"速度"},
+        {L"Speed %.1fx", L"速度 %.1fx"},
+        {L"Slower\tCtrl+Down", L"减慢\tCtrl+Down"},
+        {L"Faster\tCtrl+Up", L"加快\tCtrl+Up"},
+        {L"Reset 1x\tBackspace", L"恢复 1x\tBackspace"},
+        {L"Size", L"尺寸"},
+        {L"Toggle Fullscreen\tEnter / Double-click", L"切换全屏\tEnter / 双击"},
+        {L"Fullscreen Keep Aspect\t5", L"全屏保持比例\t5"},
+        {L"Fullscreen Stretch\t6", L"全屏拉伸\t6"},
+        {L"Volume", L"音量"},
+        {L"Volume Muted", L"音量 已静音"},
+        {L"Volume %d", L"音量 %d"},
+        {L"Down\tDown", L"减小\tDown"},
+        {L"Up\tUp", L"增大\tUp"},
+        {L"Mute\tm", L"静音\tm"},
+        {L"Clip", L"片段"},
+        {L"Clip In ", L"片段入点 "},
+        {L"Clip Out ", L"片段出点 "},
+        {L"Mark In\tz", L"标记入点\tz"},
+        {L"Mark Out\tx", L"标记出点\tx"},
+        {L"Export Clip...\tc", L"导出片段...\tc"},
+        {L"Cancel Clip\tEsc", L"取消片段\tEsc"},
+        {L"AI", L"AI"},
+        {L"Auto Captions\ta", L"自动字幕\ta"},
+        {L"Whisper Model", L"Whisper 模型"},
+        {L"Language", L"字幕语言"},
+        {L"Generate Subtitle...", L"生成字幕..."},
+        {L"Cancel Generate Subtitle\tEsc", L"取消生成字幕\tEsc"},
+        {L"YOLO26 Detect\ty", L"YOLO26 检测\ty"},
+        {L"LightFC Track\tt", L"LightFC 跟踪\tt"},
+        {L"Settings...", L"设置..."},
+        {L"About upPlayer...", L"关于 upPlayer..."},
+        {L"Exit", L"退出"},
+        {L"Download model...", L"下载模型..."},
+        {L"Settings", L"设置"},
+        {L"Prefer low-latency for network streams", L"网络流优先低延迟"},
+        {L"Recent URLs to keep:", L"保留的最近地址:"},
+        {L"Snapshot folder:", L"截图文件夹:"},
+        {L"Clip folder:", L"片段文件夹:"},
+        {L"Menu language:", L"菜单语言:"},
+        {L"Browse...", L"浏览..."},
+        {L"OK", L"确定"},
+        {L"Cancel", L"取消"},
+        {L"Snapshot folder", L"截图文件夹"},
+        {L"Clip folder", L"片段文件夹"},
+        {L"Recent URLs to keep must be between 1 and 20.", L"保留的最近地址须在 1 到 20 之间。"},
+        {L"Choose an existing snapshot folder.", L"请选择已有的截图文件夹。"},
+        {L"Choose an existing clip folder.", L"请选择已有的片段文件夹。"},
+        {L"Settings saved", L"设置已保存"},
+        {L"Snapshot format:", L"截图格式:"},
+        {L"Always on Top", L"窗口置顶"},
+        {L"Audio", L"音轨"},
+        {L"Off", L"关闭"},
+        {L"Live", L"直播"},
+        {L"Audio ", L"音轨 "},
+        {L"Subtitle ", L"字幕 "},
+        {L"Audio: ", L"音轨: "},
+        {L"Subtitle: ", L"字幕: "},
+        {L"Subtitles off", L"字幕已关闭"},
+        {L"Whisper model load failed", L"Whisper 模型加载失败"},
+        {L"Whisper model: ", L"Whisper 模型: "},
+        {L"Caption language: ", L"字幕语言: "},
+        {L"Clip In: ", L"入点: "},
+        {L"Clip Out: ", L"出点: "},
+        {L"Resumed ", L"已恢复到 "},
+        {L"Captions on", L"自动字幕开"},
+        {L"Captions off", L"自动字幕关"},
+        {L"Cancelling subtitle...", L"正在取消字幕..."},
+        {L"Generating subtitle...", L"正在生成字幕..."},
+        {L"Loaded: ", L"已加载: "},
+        {L"Unloaded subtitle", L"已卸载字幕"},
+        {L"YOLO26 off", L"YOLO26 关"},
+        {L"YOLO26 on (skip busy frames)", L"YOLO26 开（忙时跳帧）"},
+        {L"LightFC off", L"LightFC 关"},
+        {L"LightFC: click a target", L"LightFC：点击目标"},
+        {L"LightFC tracking", L"LightFC 跟踪中"},
+        {L"LightFC: locking...", L"LightFC：锁定中..."},
+        {L"No media", L"没有媒体"},
+        {L"Clip cancelled", L"已取消片段"},
+        {L"Mark In (z) and Out (x) first", L"请先标记入点 (z) 和出点 (x)"},
+        {L"Export needs a local file", L"导出需要本地文件"},
+        {L"Exporting clip...", L"正在导出片段..."},
+        {L"Clip exported. Start may move to the nearest keyframe", L"片段已导出。起点可能移到最近的关键帧"},
+        {L"Subtitle loaded", L"字幕已加载"},
+        {L"SRT saved", L"字幕已保存"},
+        {L"Generate cancelled", L"已取消生成"},
+        {L"SRT failed", L"字幕生成失败"},
+        {L"Volume: ", L"音量: "},
+        {L"Mute", L"静音"},
+        {L"Snapshot saved", L"截图已保存"},
+        {L"Snapshot saved to ", L"截图已保存到 "},
+        {L"Open Network Address", L"打开网络地址"},
+        {L"Address(&A):", L"地址(&A):"},
+        {L"Low latency", L"低延迟"},
+        {L"Clear", L"清除"},
+        {L"Enter a network address.", L"请输入网络地址。"},
+        {L"Recent list is already empty.", L"最近地址已经是空的。"},
+        {L"Clear all recent network addresses?", L"清除全部最近的网络地址？"},
+        {L"Open", L"打开"},
+        {L"Media files", L"媒体文件"},
+        {L"All files", L"所有文件"},
+        {L"About upPlayer", L"关于 upPlayer"},
+        {L"Lightweight Win32 front-end for mpv.", L"基于 mpv 的轻量 Win32 播放器。"},
+        {L"Playback: ", L"播放后端: "},
+        {L"License: MIT (see LICENSE / NOTICE)", L"许可：MIT（见 LICENSE / NOTICE）"},
+        {L"Load Subtitle", L"加载字幕"},
+        {L"Subtitle files", L"字幕文件"},
+        {L"upPlayer - Load Subtitle", L"upPlayer - 加载字幕"},
+        {L"Open a video first.", L"请先打开视频。"},
+        {L"Failed to load subtitle.", L"加载字幕失败。"},
+        {L"upPlayer - Unload Subtitle", L"upPlayer - 卸载字幕"},
+        {L"Failed to unload subtitle.", L"卸载字幕失败。"},
+        {L"Export Clip", L"导出片段"},
+        {L"upPlayer - Generate Subtitle", L"upPlayer - 生成字幕"},
+        {L"Cannot start Generate Subtitle.", L"无法开始生成字幕。"},
+        {L"Generate Subtitle failed.", L"生成字幕失败。"},
+        {L"Subtitle file saved:\r\n\r\n", L"字幕文件已保存:\r\n\r\n"},
+    };
+    for (const Pair& row : kText) {
+        if (wcscmp(row.en, english) == 0)
+            return row.zh;
+    }
+    return english;
+}
+
+void ApplySettingsDialogLanguage(HWND dialog) {
+    SetWindowTextW(dialog, Tr(L"Settings"));
+    SetDlgItemTextW(dialog, IDC_SETTINGS_LOW_LATENCY, Tr(L"Prefer low-latency for network streams"));
+    SetDlgItemTextW(dialog, IDC_SETTINGS_RECENT_LABEL, Tr(L"Recent URLs to keep:"));
+    SetDlgItemTextW(dialog, IDC_SETTINGS_SNAP_LABEL, Tr(L"Snapshot folder:"));
+    SetDlgItemTextW(dialog, IDC_SETTINGS_SNAP_FORMAT_LABEL, Tr(L"Snapshot format:"));
+    SetDlgItemTextW(dialog, IDC_SETTINGS_CLIP_LABEL, Tr(L"Clip folder:"));
+    SetDlgItemTextW(dialog, IDC_SETTINGS_MENU_LANG_LABEL, Tr(L"Menu language:"));
+    SetDlgItemTextW(dialog, IDC_SETTINGS_SNAPSHOT_BROWSE, Tr(L"Browse..."));
+    SetDlgItemTextW(dialog, IDC_SETTINGS_CLIP_BROWSE, Tr(L"Browse..."));
+    SetDlgItemTextW(dialog, IDOK, Tr(L"OK"));
+    SetDlgItemTextW(dialog, IDCANCEL, Tr(L"Cancel"));
+}
+
+void Osd(Player& player, const wchar_t* english, int duration_ms) {
+    player.show_osd(WideToUtf8(std::wstring(Tr(english))), duration_ms);
+}
+
+void Osd(Player& player, const std::wstring& text, int duration_ms) {
+    player.show_osd(WideToUtf8(text), duration_ms);
+}
+
+std::string SnapshotFormat() {
+    return LoadAppRegString(L"SnapshotFormat") == L"png" ? "png" : "jpg";
+}
+
+void ApplyUrlDialogLanguage(HWND dialog) {
+    SetWindowTextW(dialog, Tr(L"Open Network Address"));
+    SetDlgItemTextW(dialog, IDC_URL_ADDRESS_LABEL, Tr(L"Address(&A):"));
+    SetDlgItemTextW(dialog, IDC_LOW_LATENCY, Tr(L"Low latency"));
+    SetDlgItemTextW(dialog, IDOK, Tr(L"OK"));
+    SetDlgItemTextW(dialog, IDCANCEL, Tr(L"Cancel"));
+}
+
 size_t MaxRecentUrls() {
     DWORD n = LoadRegDword(L"RecentUrlLimit", 10);
     if (n < 1)
@@ -598,10 +804,11 @@ void ClearRecentFromDropdown(HWND list) {
     HWND dialog = reinterpret_cast<HWND>(GetPropW(list, kUrlListDialogProp));
     HWND combo = reinterpret_cast<HWND>(GetPropW(list, kUrlListComboProp));
     if (LoadRecentUrls().empty()) {
-        MessageBoxW(dialog, L"Recent list is already empty.", L"Open Network Address", MB_ICONINFORMATION);
+        MessageBoxW(dialog, Tr(L"Recent list is already empty."), Tr(L"Open Network Address"),
+                    MB_ICONINFORMATION);
         return;
     }
-    if (MessageBoxW(dialog, L"Clear all recent network addresses?", L"Open Network Address",
+    if (MessageBoxW(dialog, Tr(L"Clear all recent network addresses?"), Tr(L"Open Network Address"),
                     MB_YESNO | MB_ICONQUESTION) != IDYES)
         return;
     wchar_t keep[4096] = {};
@@ -683,6 +890,7 @@ INT_PTR CALLBACK UrlDlgProc(HWND dialog, UINT message, WPARAM wparam, LPARAM lpa
             SendMessageW(edit, EM_SETCUEBANNER, TRUE,
                          reinterpret_cast<LPARAM>(L"https://example.com/video.mp4"));
         CheckDlgButton(dialog, IDC_LOW_LATENCY, DefaultNetworkLowLatency() ? BST_CHECKED : BST_UNCHECKED);
+        ApplyUrlDialogLanguage(dialog);
         SetFocus(combo);
         return FALSE;
     }
@@ -726,7 +934,7 @@ INT_PTR CALLBACK UrlDlgProc(HWND dialog, UINT message, WPARAM wparam, LPARAM lpa
             SelectObject(draw->hDC, old_pen);
             DeleteObject(pen);
         }
-        DrawTextW(draw->hDC, clear_row ? L"Clear" : text, -1, &text_rc,
+        DrawTextW(draw->hDC, clear_row ? Tr(L"Clear") : text, -1, &text_rc,
                   DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
         if (!in_edit && !clear_row && draw->itemID != static_cast<UINT>(-1)) {
             RECT cross_rc = draw->rcItem;
@@ -756,7 +964,8 @@ INT_PTR CALLBACK UrlDlgProc(HWND dialog, UINT message, WPARAM wparam, LPARAM lpa
             GetDlgItemTextW(dialog, IDC_URL, buffer, 4096);
             const std::wstring url = Trim(buffer);
             if (url.empty() || IsClearRecentItem(url.c_str())) {
-                MessageBoxW(dialog, L"Enter a network address.", L"Open Network Address", MB_ICONINFORMATION);
+                MessageBoxW(dialog, Tr(L"Enter a network address."), Tr(L"Open Network Address"),
+                            MB_ICONINFORMATION);
                 return TRUE;
             }
             auto* out = reinterpret_cast<UrlDialogResult*>(GetWindowLongPtrW(dialog, DWLP_USER));
@@ -784,21 +993,39 @@ INT_PTR CALLBACK UrlDlgProc(HWND dialog, UINT message, WPARAM wparam, LPARAM lpa
 
 
 INT_PTR CALLBACK SettingsDlgProc(HWND dialog, UINT message, WPARAM wparam, LPARAM lparam) {
-    (void)lparam;
     switch (message) {
-    case WM_INITDIALOG:
+    case WM_CTLCOLORSTATIC:
+        if (GetDlgCtrlID(reinterpret_cast<HWND>(lparam)) == IDC_SETTINGS_RECENT_HINT) {
+            const HDC dc = reinterpret_cast<HDC>(wparam);
+            SetTextColor(dc, GetSysColor(COLOR_GRAYTEXT));
+            SetBkColor(dc, GetSysColor(COLOR_BTNFACE));
+            return reinterpret_cast<INT_PTR>(GetSysColorBrush(COLOR_BTNFACE));
+        }
+        break;
+    case WM_INITDIALOG: {
+        LoadMenuLanguage();
+        ApplySettingsDialogLanguage(dialog);
         CheckDlgButton(dialog, IDC_SETTINGS_LOW_LATENCY,
                        DefaultNetworkLowLatency() ? BST_CHECKED : BST_UNCHECKED);
         SetDlgItemInt(dialog, IDC_SETTINGS_RECENT_COUNT, static_cast<UINT>(MaxRecentUrls()), FALSE);
         SetDlgItemTextW(dialog, IDC_SETTINGS_SNAPSHOT, SnapshotDirectory().c_str());
         SetDlgItemTextW(dialog, IDC_SETTINGS_CLIP_DIR, ClipOutputDirectory().c_str());
+        HWND languages = GetDlgItem(dialog, IDC_SETTINGS_MENU_LANG);
+        SendMessageW(languages, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"English"));
+        SendMessageW(languages, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"中文"));
+        SendMessageW(languages, CB_SETCURSEL, g_menu_language == MenuLanguage::Chinese ? 1 : 0, 0);
+        HWND formats = GetDlgItem(dialog, IDC_SETTINGS_SNAP_FORMAT);
+        SendMessageW(formats, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"JPEG"));
+        SendMessageW(formats, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"PNG"));
+        SendMessageW(formats, CB_SETCURSEL, SnapshotFormat() == "png" ? 1 : 0, 0);
         return TRUE;
+    }
     case WM_COMMAND:
         switch (LOWORD(wparam)) {
         case IDC_SETTINGS_SNAPSHOT_BROWSE: {
             wchar_t current[1024] = {};
             GetDlgItemTextW(dialog, IDC_SETTINGS_SNAPSHOT, current, 1024);
-            const std::wstring picked = PickFolder(dialog, Trim(current), L"Snapshot folder");
+            const std::wstring picked = PickFolder(dialog, Trim(current), Tr(L"Snapshot folder"));
             if (!picked.empty())
                 SetDlgItemTextW(dialog, IDC_SETTINGS_SNAPSHOT, picked.c_str());
             return TRUE;
@@ -806,7 +1033,7 @@ INT_PTR CALLBACK SettingsDlgProc(HWND dialog, UINT message, WPARAM wparam, LPARA
         case IDC_SETTINGS_CLIP_BROWSE: {
             wchar_t current[1024] = {};
             GetDlgItemTextW(dialog, IDC_SETTINGS_CLIP_DIR, current, 1024);
-            const std::wstring picked = PickFolder(dialog, Trim(current), L"Clip folder");
+            const std::wstring picked = PickFolder(dialog, Trim(current), Tr(L"Clip folder"));
             if (!picked.empty())
                 SetDlgItemTextW(dialog, IDC_SETTINGS_CLIP_DIR, picked.c_str());
             return TRUE;
@@ -815,7 +1042,7 @@ INT_PTR CALLBACK SettingsDlgProc(HWND dialog, UINT message, WPARAM wparam, LPARA
             BOOL translated = FALSE;
             UINT recent = GetDlgItemInt(dialog, IDC_SETTINGS_RECENT_COUNT, &translated, FALSE);
             if (!translated || recent < 1 || recent > 20) {
-                MessageBoxW(dialog, L"Recent URLs to keep must be between 1 and 20.", L"Settings",
+                MessageBoxW(dialog, Tr(L"Recent URLs to keep must be between 1 and 20."), Tr(L"Settings"),
                             MB_OK | MB_ICONINFORMATION);
                 return TRUE;
             }
@@ -825,7 +1052,7 @@ INT_PTR CALLBACK SettingsDlgProc(HWND dialog, UINT message, WPARAM wparam, LPARA
             if (!folder.empty()) {
                 const DWORD attr = GetFileAttributesW(folder.c_str());
                 if (attr == INVALID_FILE_ATTRIBUTES || (attr & FILE_ATTRIBUTE_DIRECTORY) == 0) {
-                    MessageBoxW(dialog, L"Choose an existing snapshot folder.", L"Settings",
+                    MessageBoxW(dialog, Tr(L"Choose an existing snapshot folder."), Tr(L"Settings"),
                                 MB_OK | MB_ICONINFORMATION);
                     return TRUE;
                 }
@@ -836,7 +1063,7 @@ INT_PTR CALLBACK SettingsDlgProc(HWND dialog, UINT message, WPARAM wparam, LPARA
             if (!clip_folder.empty()) {
                 const DWORD attr = GetFileAttributesW(clip_folder.c_str());
                 if (attr == INVALID_FILE_ATTRIBUTES || (attr & FILE_ATTRIBUTE_DIRECTORY) == 0) {
-                    MessageBoxW(dialog, L"Choose an existing clip folder.", L"Settings",
+                    MessageBoxW(dialog, Tr(L"Choose an existing clip folder."), Tr(L"Settings"),
                                 MB_OK | MB_ICONINFORMATION);
                     return TRUE;
                 }
@@ -853,6 +1080,12 @@ INT_PTR CALLBACK SettingsDlgProc(HWND dialog, UINT message, WPARAM wparam, LPARA
             SaveRegDword(L"NetworkLowLatency",
                          IsDlgButtonChecked(dialog, IDC_SETTINGS_LOW_LATENCY) == BST_CHECKED ? 1 : 0);
             SaveRegDword(L"RecentUrlLimit", recent);
+            const LRESULT language =
+                SendMessageW(GetDlgItem(dialog, IDC_SETTINGS_MENU_LANG), CB_GETCURSEL, 0, 0);
+            SaveAppRegString(L"MenuLanguage", language == 1 ? L"zh" : L"en");
+            const LRESULT format =
+                SendMessageW(GetDlgItem(dialog, IDC_SETTINGS_SNAP_FORMAT), CB_GETCURSEL, 0, 0);
+            SaveAppRegString(L"SnapshotFormat", format == 1 ? L"png" : L"jpg");
             {
                 std::vector<std::wstring> urls = LoadRecentUrls();
                 if (urls.size() > recent)
@@ -1095,6 +1328,64 @@ int SeparatorBeforePopup(HMENU menu, HMENU popup) {
     return pos;
 }
 
+std::wstring ModuleDirectory() {
+    wchar_t buffer[MAX_PATH];
+    const DWORD length = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
+    if (length == 0 || length >= MAX_PATH)
+        return {};
+    std::wstring dir(buffer, length);
+    const auto slash = dir.find_last_of(L"\\/");
+    if (slash == std::wstring::npos)
+        return {};
+    dir.resize(slash);
+    return dir;
+}
+
+bool PathExists(const std::wstring& path) {
+    return !path.empty() && GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES;
+}
+
+bool AiBundlePresent() {
+    const std::wstring root = ModuleDirectory();
+    if (root.empty())
+        return false;
+    const wchar_t* markers[] = {
+        L"\\onnxruntime.dll",
+        L"\\yolo26\\yolo26n.onnx",
+        L"\\lightfc\\lightfc_z.onnx",
+        L"\\whisper\\whisper-cli.exe",
+        L"\\whisper\\whisper-server.exe",
+        L"\\whisper\\main.exe",
+        L"\\whisper\\whisper.exe",
+    };
+    for (const wchar_t* marker : markers) {
+        if (PathExists(root + marker))
+            return true;
+    }
+    return false;
+}
+
+int MenuCommandPosition(HMENU menu, UINT id) {
+    if (!menu)
+        return -1;
+    const int count = GetMenuItemCount(menu);
+    for (int i = 0; i < count; ++i) {
+        if (GetMenuItemID(menu, i) == id)
+            return i;
+    }
+    return -1;
+}
+
+int InsertBeforeAiOrSettings(HMENU menu, HMENU ai_menu) {
+    const int ai = PopupMenuPosition(menu, ai_menu);
+    if (ai >= 0)
+        return ai;
+    const int settings = MenuCommandPosition(menu, ID_SETTINGS);
+    if (settings >= 0)
+        return settings;
+    return GetMenuItemCount(menu);
+}
+
 void SetPopupVisible(HMENU parent, HMENU popup, const wchar_t* text, int insert_pos, bool visible) {
     if (!parent || !popup)
         return;
@@ -1156,6 +1447,7 @@ private:
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
     static LRESULT CALLBACK VideoProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
     static LRESULT CALLBACK SeekBarProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
+    static LRESULT CALLBACK PinProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
 
     LRESULT handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
     LRESULT handle_seek_bar(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
@@ -1163,6 +1455,11 @@ private:
     void disable_ime(HWND hwnd);
     void claim_keyboard_focus();
     void create_children();
+    void apply_menu_language();
+    void refresh_track_menus();
+    void set_always_on_top(bool enabled, bool save);
+    void place_pin_button();
+    void update_pin_tooltip();
     void layout();
     void update_title();
     void update_seek_bar();
@@ -1221,11 +1518,14 @@ private:
     void remember_volume();
     void remember_resume();
     bool live_playback() const;
+    std::wstring track_label(const MediaTrack& track) const;
 
     HINSTANCE instance_ = nullptr;
     HWND hwnd_ = nullptr;
     HWND video_ = nullptr;
     HWND seek_bar_ = nullptr;
+    HWND pin_ = nullptr;
+    HWND pin_tip_ = nullptr;
     HMENU context_menu_ = nullptr;
     HMENU playback_menu_ = nullptr;
     HMENU speed_menu_ = nullptr;
@@ -1236,6 +1536,12 @@ private:
     HMENU caption_model_menu_ = nullptr;
     HMENU caption_lang_menu_ = nullptr;
     HMENU subtitle_menu_ = nullptr;
+    HMENU audio_menu_ = nullptr;
+    std::vector<int> audio_track_ids_;
+    std::vector<int> sub_track_ids_;
+    bool always_on_top_ = false;
+    bool pin_hover_ = false;
+    bool pin_pressed_ = false;
     bool external_subtitle_loaded_ = false;
     std::vector<std::wstring> caption_model_ids_;
     std::vector<std::wstring> caption_lang_ids_;
@@ -1298,6 +1604,13 @@ bool App::create(int show, const std::vector<std::wstring>& files) {
     seek_class.lpszClassName = L"upPlayerSeekBar";
     RegisterClassW(&seek_class);
 
+    WNDCLASSW pin_class{};
+    pin_class.lpfnWndProc = PinProc;
+    pin_class.hInstance = instance_;
+    pin_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    pin_class.lpszClassName = L"upPlayerPin";
+    RegisterClassW(&pin_class);
+
     WNDCLASSEXW window_class{};
     window_class.cbSize = sizeof(window_class);
     window_class.lpfnWndProc = WndProc;
@@ -1345,6 +1658,7 @@ bool App::create(int show, const std::vector<std::wstring>& files) {
     lightfc_ = std::make_unique<LightFcWorker>(hwnd_);
 
     player_.set_screenshot_directory(SnapshotDirectory());
+    player_.set_screenshot_format(SnapshotFormat());
     if (!player_.start(video_, hwnd_)) {
         MessageBoxW(hwnd_, player_.start_error().c_str(), L"upPlayer", MB_ICONERROR);
     } else {
@@ -1357,6 +1671,7 @@ bool App::create(int show, const std::vector<std::wstring>& files) {
         }
     }
     SetTimer(hwnd_, kTimerStatus, 100, nullptr);
+    SetTimer(hwnd_, kTimerPin, 200, nullptr);
     update_seek_bar();
     return true;
 }
@@ -1428,15 +1743,18 @@ bool App::handle_playback_key(UINT message, WPARAM wparam) {
             return true;
         case L'a':
         case L'A':
-            toggle_captions();
+            if (AiBundlePresent())
+                toggle_captions();
             return true;
         case L'y':
         case L'Y':
-            cycle_yolo_mode();
+            if (AiBundlePresent())
+                cycle_yolo_mode();
             return true;
         case L't':
         case L'T':
-            cycle_lightfc_mode();
+            if (AiBundlePresent())
+                cycle_lightfc_mode();
             return true;
         default:
             return false;
@@ -1601,6 +1919,217 @@ LRESULT CALLBACK App::SeekBarProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM
     return app->handle_seek_bar(hwnd, message, wparam, lparam);
 }
 
+void PaintPinButton(HWND hwnd, bool pinned, bool hover, bool pressed) {
+    PAINTSTRUCT paint{};
+    HDC dc = BeginPaint(hwnd, &paint);
+    RECT rect{};
+    GetClientRect(hwnd, &rect);
+    const int width = rect.right - rect.left;
+    const int height = rect.bottom - rect.top;
+    if (width <= 0 || height <= 0) {
+        EndPaint(hwnd, &paint);
+        return;
+    }
+    HDC mem = CreateCompatibleDC(dc);
+    HBITMAP bitmap = CreateCompatibleBitmap(dc, width, height);
+    HGDIOBJ old_bitmap = SelectObject(mem, bitmap);
+
+    COLORREF background = RGB(26, 32, 49);
+    COLORREF edge = background;
+    RECT pin_rect{};
+    if (GetWindowRect(hwnd, &pin_rect)) {
+        HDC screen = GetDC(nullptr);
+        if (screen) {
+            const int sample_x = pin_rect.left - 8;
+            background = GetPixel(screen, sample_x, pin_rect.top + height / 2);
+            if (background == CLR_INVALID || GetRValue(background) > 90)
+                background = GetPixel(screen, sample_x, pin_rect.top + 4);
+            edge = GetPixel(screen, sample_x, pin_rect.top);
+            if (background == CLR_INVALID)
+                background = RGB(26, 32, 49);
+            if (edge == CLR_INVALID)
+                edge = background;
+            ReleaseDC(nullptr, screen);
+        }
+    }
+    HBRUSH fill = CreateSolidBrush(background);
+    FillRect(mem, &rect, fill);
+    DeleteObject(fill);
+    if (edge != background) {
+        HPEN edge_pen = CreatePen(PS_SOLID, 1, edge);
+        HGDIOBJ previous = SelectObject(mem, edge_pen);
+        MoveToEx(mem, 0, 0, nullptr);
+        LineTo(mem, width, 0);
+        SelectObject(mem, previous);
+        DeleteObject(edge_pen);
+    }
+
+    if (hover || pressed) {
+        const int lift = pressed ? 46 : 28;
+        const COLORREF hot = RGB(std::min(255, GetRValue(background) + lift),
+                                 std::min(255, GetGValue(background) + lift),
+                                 std::min(255, GetBValue(background) + lift));
+        const int inset = std::max(2, height / 8);
+        RECT hot_rect{inset, inset, width - inset, height - inset};
+        HBRUSH hot_brush = CreateSolidBrush(hot);
+        const int radius = std::max(4, height / 6);
+        HRGN region = CreateRoundRectRgn(hot_rect.left, hot_rect.top, hot_rect.right + 1, hot_rect.bottom + 1,
+                                         radius, radius);
+        FillRgn(mem, region, hot_brush);
+        DeleteObject(region);
+        DeleteObject(hot_brush);
+    }
+
+    const COLORREF icon = pinned ? RGB(110, 200, 255) : RGB(255, 255, 255);
+    const int cx = width / 2;
+    const int head_r = std::max(3, height / 8);
+    const int head_cy = height / 2 - head_r / 3;
+    const int thickness = std::max(2, height / 28);
+    HPEN pen = CreatePen(PS_SOLID, thickness, icon);
+    HGDIOBJ old_pen = SelectObject(mem, pen);
+    HBRUSH head = pinned ? CreateSolidBrush(icon) : static_cast<HBRUSH>(GetStockObject(NULL_BRUSH));
+    HGDIOBJ old_brush = SelectObject(mem, head);
+    Ellipse(mem, cx - head_r, head_cy - head_r, cx + head_r, head_cy + head_r);
+    const int shaft_top = head_cy + head_r - thickness;
+    const int shaft_bottom = std::min(height - std::max(3, height / 8), shaft_top + head_r * 2);
+    MoveToEx(mem, cx, shaft_top, nullptr);
+    LineTo(mem, cx, shaft_bottom);
+    SelectObject(mem, old_brush);
+    SelectObject(mem, old_pen);
+    if (pinned)
+        DeleteObject(head);
+    DeleteObject(pen);
+
+    BitBlt(dc, 0, 0, width, height, mem, 0, 0, SRCCOPY);
+    SelectObject(mem, old_bitmap);
+    DeleteObject(bitmap);
+    DeleteDC(mem);
+    EndPaint(hwnd, &paint);
+}
+
+LRESULT CALLBACK App::PinProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
+    if (message == WM_NCCREATE) {
+        auto* created = reinterpret_cast<CREATESTRUCTW*>(lparam);
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(created->lpCreateParams));
+        return DefWindowProcW(hwnd, message, wparam, lparam);
+    }
+    auto* app = reinterpret_cast<App*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    if (!app)
+        return DefWindowProcW(hwnd, message, wparam, lparam);
+    switch (message) {
+    case WM_MOUSEACTIVATE:
+        return MA_NOACTIVATE;
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_PAINT:
+        PaintPinButton(hwnd, app->always_on_top_, app->pin_hover_, app->pin_pressed_);
+        return 0;
+    case WM_MOUSEMOVE:
+        if (!app->pin_hover_) {
+            app->pin_hover_ = true;
+            TRACKMOUSEEVENT track{sizeof(track), TME_LEAVE, hwnd, 0};
+            TrackMouseEvent(&track);
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        return 0;
+    case WM_MOUSELEAVE:
+        app->pin_hover_ = false;
+        app->pin_pressed_ = false;
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+    case WM_LBUTTONDOWN:
+        app->pin_pressed_ = true;
+        SetCapture(hwnd);
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+    case WM_LBUTTONUP: {
+        POINT pt{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+        RECT rect{};
+        GetClientRect(hwnd, &rect);
+        const bool inside = PtInRect(&rect, pt) != FALSE;
+        app->pin_pressed_ = false;
+        if (GetCapture() == hwnd)
+            ReleaseCapture();
+        InvalidateRect(hwnd, nullptr, FALSE);
+        if (inside)
+            app->set_always_on_top(!app->always_on_top_, true);
+        return 0;
+    }
+    default:
+        break;
+    }
+    return DefWindowProcW(hwnd, message, wparam, lparam);
+}
+
+void App::apply_menu_language() {
+    auto item = [](HMENU menu, UINT id, const wchar_t* english) {
+        if (MenuCommandPresent(menu, id))
+            ModifyMenuW(menu, id, MF_BYCOMMAND | MF_STRING, id, Tr(english));
+    };
+    auto popup = [](HMENU parent, HMENU child, const wchar_t* english) {
+        const int pos = PopupMenuPosition(parent, child);
+        if (pos >= 0)
+            ModifyMenuW(parent, static_cast<UINT>(pos), MF_BYPOSITION | MF_POPUP,
+                        reinterpret_cast<UINT_PTR>(child), Tr(english));
+    };
+
+    item(context_menu_, ID_FILE_OPEN, L"Open...\tCtrl+O");
+    item(context_menu_, ID_FILE_OPEN_URL, L"Open Network Address...\tCtrl+U");
+    item(context_menu_, ID_SNAPSHOT, L"Take Snapshot\ts");
+    item(context_menu_, ID_SETTINGS, L"Settings...");
+    item(context_menu_, ID_HELP_ABOUT, L"About upPlayer...");
+    item(context_menu_, ID_FILE_EXIT, L"Exit");
+    popup(context_menu_, subtitle_menu_, L"Subtitle");
+    popup(context_menu_, playback_menu_, L"Playback");
+    popup(context_menu_, speed_menu_, L"Speed");
+    popup(context_menu_, size_menu_, L"Size");
+    popup(context_menu_, volume_menu_, L"Volume");
+    popup(context_menu_, clip_menu_, L"Clip");
+    popup(context_menu_, overlay_menu_, L"AI");
+
+    item(playback_menu_, ID_PLAY_PAUSE, L"Play/Pause\tSpace");
+    item(playback_menu_, ID_STOP, L"Stop");
+    item(playback_menu_, ID_SEEK_BACK, L"Seek -5s\tLeft");
+    item(playback_menu_, ID_SEEK_FORWARD, L"Seek +5s\tRight");
+    item(playback_menu_, ID_FRAME_BACK, L"Frame Back\t,");
+    item(playback_menu_, ID_FRAME_FORWARD, L"Frame Forward\t.");
+    popup(playback_menu_, audio_menu_, L"Audio");
+    item(playback_menu_, ID_STATS_SHOW, L"Stats\ti");
+    item(playback_menu_, ID_STATS_TOGGLE, L"Stats Toggle\tI");
+
+    item(speed_menu_, ID_SPEED_DOWN, L"Slower\tCtrl+Down");
+    item(speed_menu_, ID_SPEED_UP, L"Faster\tCtrl+Up");
+    item(speed_menu_, ID_SPEED_RESET, L"Reset 1x\tBackspace");
+
+    item(size_menu_, ID_SIZE_05, L"0.5x\t1");
+    item(size_menu_, ID_SIZE_10, L"1x\t2");
+    item(size_menu_, ID_SIZE_15, L"1.5x\t3");
+    item(size_menu_, ID_SIZE_20, L"2x\t4");
+    item(size_menu_, ID_FULLSCREEN_TOGGLE, L"Toggle Fullscreen\tEnter / Double-click");
+    item(size_menu_, ID_FULLSCREEN_NORMAL, L"Fullscreen Keep Aspect\t5");
+    item(size_menu_, ID_FULLSCREEN_STRETCH, L"Fullscreen Stretch\t6");
+
+    item(volume_menu_, ID_VOLUME_DOWN, L"Down\tDown");
+    item(volume_menu_, ID_VOLUME_UP, L"Up\tUp");
+    item(volume_menu_, ID_VOLUME_MUTE, L"Mute\tm");
+
+    item(clip_menu_, ID_CLIP_MARK_IN, L"Mark In\tz");
+    item(clip_menu_, ID_CLIP_MARK_OUT, L"Mark Out\tx");
+    item(clip_menu_, ID_CLIP_EXPORT, L"Export Clip...\tc");
+    item(clip_menu_, ID_CLIP_CLEAR, L"Cancel Clip\tEsc");
+
+    item(subtitle_menu_, ID_LOAD_SRT, L"Load Subtitle...");
+    item(subtitle_menu_, ID_CLEAR_SRT, L"Unload Subtitle");
+
+    item(overlay_menu_, ID_CAPTIONS_TOGGLE, L"Auto Captions\ta");
+    item(overlay_menu_, ID_GENERATE_SRT, L"Generate Subtitle...");
+    item(overlay_menu_, ID_YOLO_TOGGLE, L"YOLO26 Detect\ty");
+    item(overlay_menu_, ID_LIGHTFC_TOGGLE, L"LightFC Track\tt");
+    popup(overlay_menu_, caption_model_menu_, L"Whisper Model");
+    popup(overlay_menu_, caption_lang_menu_, L"Language");
+    update_pin_tooltip();
+}
+
 void App::create_children() {
     video_ = CreateWindowExW(0, L"upPlayerVideo", nullptr, WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
                              0, 0, 10, 10, hwnd_, nullptr, instance_, nullptr);
@@ -1622,6 +2151,7 @@ void App::create_children() {
     AppendMenuW(playback_menu, MF_STRING, ID_FRAME_BACK, L"Frame Back\t,");
     AppendMenuW(playback_menu, MF_STRING, ID_FRAME_FORWARD, L"Frame Forward\t.");
     AppendMenuW(playback_menu, MF_SEPARATOR, 0, nullptr);
+    audio_menu_ = CreatePopupMenu();
     AppendMenuW(playback_menu, MF_STRING, ID_STATS_SHOW, L"Stats\ti");
     AppendMenuW(playback_menu, MF_STRING, ID_STATS_TOGGLE, L"Stats Toggle\tI");
 
@@ -1688,6 +2218,24 @@ void App::create_children() {
     AppendMenuW(context_menu_, MF_STRING, ID_HELP_ABOUT, L"About upPlayer...");
     AppendMenuW(context_menu_, MF_STRING, ID_FILE_EXIT, L"Exit");
 
+    pin_ = CreateWindowExW(WS_EX_NOACTIVATE | WS_EX_NOPARENTNOTIFY, L"upPlayerPin", nullptr, WS_POPUP,
+                           0, 0, 0, 0, hwnd_, nullptr, instance_, this);
+    pin_tip_ = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASS, nullptr,
+                               WS_POPUP | TTS_NOPREFIX | TTS_ALWAYSTIP, CW_USEDEFAULT, CW_USEDEFAULT,
+                               CW_USEDEFAULT, CW_USEDEFAULT, pin_, nullptr, instance_, nullptr);
+    if (pin_tip_) {
+        TOOLINFOW info{};
+        info.cbSize = sizeof(info);
+        info.uFlags = TTF_IDISHWND | TTF_SUBCLASS | TTF_TRANSPARENT;
+        info.hwnd = pin_;
+        info.uId = reinterpret_cast<UINT_PTR>(pin_);
+        info.lpszText = const_cast<wchar_t*>(L"");
+        SendMessageW(pin_tip_, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&info));
+    }
+    LoadMenuLanguage();
+    apply_menu_language();
+    set_always_on_top(LoadRegDword(L"AlwaysOnTop", 0) != 0, false);
+    place_pin_button();
     DragAcceptFiles(hwnd_, TRUE);
 }
 
@@ -1708,7 +2256,7 @@ void App::refresh_caption_menus() {
     const std::vector<CaptionOption> models = captions_->models();
     const std::wstring current_model = captions_->model_id();
     if (models.empty()) {
-        AppendMenuW(caption_model_menu_, MF_STRING, ID_WHISPER_GET_MODEL, L"Download model...");
+        AppendMenuW(caption_model_menu_, MF_STRING, ID_WHISPER_GET_MODEL, Tr(L"Download model..."));
     } else {
         const size_t count = (std::min)(models.size(), static_cast<size_t>(ID_CAPTION_MODEL_LAST - ID_CAPTION_MODEL_FIRST + 1));
         for (size_t i = 0; i < count; ++i) {
@@ -1757,10 +2305,10 @@ void App::select_caption_model(UINT index) {
         ShowWhisperModelLoadHelp(hwnd_,
             L"Model file is missing from the model directory (or could not be loaded).",
             id);
-        player_.show_osd("Whisper model load failed", 1800);
+        Osd(player_, L"Whisper model load failed", 1800);
         return;
     }
-    player_.show_osd(WideToUtf8(L"Whisper model: " + label), 1400);
+    Osd(player_, std::wstring(Tr(L"Whisper model: ")) + label, 1400);
 }
 
 void App::select_caption_language(UINT index) {
@@ -1775,7 +2323,7 @@ void App::select_caption_language(UINT index) {
         }
     }
     captions_->set_language(id);
-    player_.show_osd(WideToUtf8(L"Caption language: " + label), 1400);
+    Osd(player_, std::wstring(Tr(L"Caption language: ")) + label, 1400);
 }
 
 void App::show_context_menu(int screen_x, int screen_y) {
@@ -1789,10 +2337,10 @@ void App::show_context_menu(int screen_x, int screen_y) {
         const bool has_media = playback.has_media;
         const bool srt_busy = captions_ && captions_->srt_busy();
         const wchar_t* generate_text =
-            srt_busy ? L"Cancel Generate Subtitle\tEsc" : L"Generate Subtitle...";
+            srt_busy ? Tr(L"Cancel Generate Subtitle\tEsc") : Tr(L"Generate Subtitle...");
         const bool show_picture_actions = has_media;
         SetMenuCommandVisible(overlay_menu_, ID_CAPTIONS_TOGGLE, show_picture_actions,
-                              L"Auto Captions\ta", 0);
+                              Tr(L"Auto Captions\ta"), 0);
         const int after_language = PopupMenuPosition(overlay_menu_, caption_lang_menu_) + 1;
         SetMenuCommandVisible(overlay_menu_, ID_GENERATE_SRT, srt_busy || has_media, generate_text,
                               after_language);
@@ -1801,13 +2349,13 @@ void App::show_context_menu(int screen_x, int screen_y) {
                                                                                       : after_language;
         SetSeparatorVisible(overlay_menu_, after_generate, show_detectors);
         const int after_separator = MenuSeparatorPosition(overlay_menu_) + 1;
-        SetMenuCommandVisible(overlay_menu_, ID_YOLO_TOGGLE, show_detectors, L"YOLO26 Detect\ty",
+        SetMenuCommandVisible(overlay_menu_, ID_YOLO_TOGGLE, show_detectors, Tr(L"YOLO26 Detect\ty"),
                               after_separator > 0 ? after_separator : GetMenuItemCount(overlay_menu_));
-        SetMenuCommandVisible(overlay_menu_, ID_LIGHTFC_TOGGLE, show_detectors, L"LightFC Track\tt",
+        SetMenuCommandVisible(overlay_menu_, ID_LIGHTFC_TOGGLE, show_detectors, Tr(L"LightFC Track\tt"),
                               GetMenuItemCount(overlay_menu_));
-        SetMenuCommandVisible(subtitle_menu_, ID_LOAD_SRT, has_media, L"Load Subtitle...", 0);
+        SetMenuCommandVisible(subtitle_menu_, ID_LOAD_SRT, has_media, Tr(L"Load Subtitle..."), 0);
         SetMenuCommandVisible(subtitle_menu_, ID_CLEAR_SRT, external_subtitle_loaded_,
-                              L"Unload Subtitle", GetMenuItemCount(subtitle_menu_));
+                              Tr(L"Unload Subtitle"), GetMenuItemCount(subtitle_menu_));
         const bool subtitle_has_items = subtitle_menu_ && GetMenuItemCount(subtitle_menu_) > 0;
         const bool clip_marked = clip_in_ >= 0.0 || clip_out_ >= 0.0;
         const bool local_file = !IsNetworkTarget(player_.current_path());
@@ -1825,10 +2373,10 @@ void App::show_context_menu(int screen_x, int screen_y) {
                 }
                 if (!trailing_sep)
                     AppendMenuW(clip_menu_, MF_SEPARATOR, 0, nullptr);
-                AppendMenuW(clip_menu_, MF_STRING, ID_CLIP_CLEAR, L"Cancel Clip\tEsc");
+                AppendMenuW(clip_menu_, MF_STRING, ID_CLIP_CLEAR, Tr(L"Cancel Clip\tEsc"));
             }
         } else {
-            SetMenuCommandVisible(clip_menu_, ID_CLIP_CLEAR, false, L"Cancel Clip\tEsc", 0);
+            SetMenuCommandVisible(clip_menu_, ID_CLIP_CLEAR, false, Tr(L"Cancel Clip\tEsc"), 0);
             const int count = GetMenuItemCount(clip_menu_);
             if (count > 0) {
                 MENUITEMINFOW info{};
@@ -1839,22 +2387,22 @@ void App::show_context_menu(int screen_x, int screen_y) {
                     RemoveMenu(clip_menu_, static_cast<UINT>(count - 1), MF_BYPOSITION);
             }
         }
-        SetMenuCommandVisible(clip_menu_, ID_CLIP_EXPORT, clip_exportable, L"Export Clip...\tc", 2);
+        SetMenuCommandVisible(clip_menu_, ID_CLIP_EXPORT, clip_exportable, Tr(L"Export Clip...\tc"), 2);
         SetMenuCommandVisible(playback_menu_, ID_PLAY_PAUSE, true,
-                              playback.paused ? L"Play\tSpace" : L"Pause\tSpace", 0);
+                              playback.paused ? Tr(L"Play\tSpace") : Tr(L"Pause\tSpace"), 0);
         const bool show_seek = has_media && !player_.low_latency();
-        SetMenuCommandVisible(playback_menu_, ID_SEEK_BACK, show_seek, L"Seek -5s\tLeft", 3);
-        SetMenuCommandVisible(playback_menu_, ID_SEEK_FORWARD, show_seek, L"Seek +5s\tRight", 4);
+        SetMenuCommandVisible(playback_menu_, ID_SEEK_BACK, show_seek, Tr(L"Seek -5s\tLeft"), 3);
+        SetMenuCommandVisible(playback_menu_, ID_SEEK_FORWARD, show_seek, Tr(L"Seek +5s\tRight"), 4);
 
-        std::wstring speed_label = L"Speed";
+        std::wstring speed_label = Tr(L"Speed");
         if (playback.speed > 0.0 && std::fabs(playback.speed - 1.0) >= 0.05) {
             wchar_t buf[32];
-            swprintf_s(buf, L"Speed %.1fx", playback.speed);
+            swprintf_s(buf, Tr(L"Speed %.1fx"), playback.speed);
             speed_label = buf;
         }
-        std::wstring volume_label = L"Volume";
+        std::wstring volume_label = Tr(L"Volume");
         if (playback.mute) {
-            volume_label = L"Volume Muted";
+            volume_label = Tr(L"Volume Muted");
         } else {
             int level = static_cast<int>(std::lround(playback.volume));
             if (level < 0)
@@ -1862,32 +2410,36 @@ void App::show_context_menu(int screen_x, int screen_y) {
             if (level > 100)
                 level = 100;
             wchar_t buf[32];
-            swprintf_s(buf, L"Volume %d", level);
+            swprintf_s(buf, Tr(L"Volume %d"), level);
             volume_label = buf;
         }
 
+        const bool ai_available = AiBundlePresent();
+        const int before_ai = InsertBeforeAiOrSettings(context_menu_, overlay_menu_);
         SetPopupVisible(context_menu_, speed_menu_, speed_label.c_str(),
                         PopupMenuPosition(context_menu_, volume_menu_), has_media);
-        SetPopupVisible(context_menu_, volume_menu_, volume_label.c_str(),
-                        PopupMenuPosition(context_menu_, overlay_menu_), true);
+        SetPopupVisible(context_menu_, volume_menu_, volume_label.c_str(), before_ai, true);
         const int before_speed = SeparatorBeforePopup(context_menu_, speed_menu_);
-        SetMenuCommandVisible(context_menu_, ID_SNAPSHOT, has_media, L"Take Snapshot\ts", before_speed);
-        SetPopupVisible(context_menu_, subtitle_menu_, L"Subtitle",
+        SetMenuCommandVisible(context_menu_, ID_SNAPSHOT, has_media, Tr(L"Take Snapshot\ts"), before_speed);
+        SetPopupVisible(context_menu_, subtitle_menu_, Tr(L"Subtitle"),
                         SeparatorBeforePopup(context_menu_, speed_menu_), subtitle_has_items);
-        SetPopupVisible(context_menu_, playback_menu_, L"Playback",
+        SetPopupVisible(context_menu_, playback_menu_, Tr(L"Playback"),
                         PopupMenuPosition(context_menu_, speed_menu_), has_media);
-        SetPopupVisible(context_menu_, size_menu_, L"Size",
+        SetPopupVisible(context_menu_, size_menu_, Tr(L"Size"),
                         PopupMenuPosition(context_menu_, volume_menu_), has_media);
-        std::wstring clip_label = L"Clip";
+        std::wstring clip_label = Tr(L"Clip");
         if (clip_active_ == ClipMark::In && clip_in_ >= 0.0)
-            clip_label = L"Clip In " + FormatTime(clip_in_);
+            clip_label = std::wstring(Tr(L"Clip In ")) + FormatTime(clip_in_);
         else if (clip_active_ == ClipMark::Out && clip_out_ >= 0.0)
-            clip_label = L"Clip Out " + FormatTime(clip_out_);
+            clip_label = std::wstring(Tr(L"Clip Out ")) + FormatTime(clip_out_);
         else if (clip_in_ >= 0.0 && clip_out_ >= 0.0)
-            clip_label = L"Clip " + FormatTime(clip_in_) + L"\u2013" + FormatTime(clip_out_);
+            clip_label = std::wstring(Tr(L"Clip")) + L" " + FormatTime(clip_in_) + L"\u2013" + FormatTime(clip_out_);
         SetPopupVisible(context_menu_, clip_menu_, clip_label.c_str(),
-                        PopupMenuPosition(context_menu_, overlay_menu_), has_media);
+                        InsertBeforeAiOrSettings(context_menu_, overlay_menu_), has_media);
+        SetPopupVisible(context_menu_, overlay_menu_, Tr(L"AI"),
+                        MenuCommandPosition(context_menu_, ID_SETTINGS), ai_available);
     }
+    refresh_track_menus();
     CheckMenuItem(context_menu_, ID_YOLO_TOGGLE,
                   MF_BYCOMMAND | ((yolo_ && yolo_->enabled()) ? MF_CHECKED : MF_UNCHECKED));
     CheckMenuItem(context_menu_, ID_LIGHTFC_TOGGLE,
@@ -1896,6 +2448,176 @@ void App::show_context_menu(int screen_x, int screen_y) {
     TrackPopupMenu(context_menu_, TPM_RIGHTBUTTON | TPM_LEFTALIGN | TPM_TOPALIGN,
                    screen_x, screen_y, 0, hwnd_, nullptr);
     PostMessageW(hwnd_, WM_NULL, 0, 0);
+}
+
+std::wstring App::track_label(const MediaTrack& track) const {
+    if (!track.title.empty())
+        return track.title;
+    if (!track.lang.empty())
+        return track.lang;
+    const wchar_t* prefix = track.type == L"audio" ? L"Audio " : L"Subtitle ";
+    return std::wstring(Tr(prefix)) + std::to_wstring(track.id);
+}
+
+void App::set_always_on_top(bool enabled, bool save) {
+    always_on_top_ = enabled;
+    const HWND z = enabled ? HWND_TOPMOST : HWND_NOTOPMOST;
+    if (hwnd_) {
+        SetWindowPos(hwnd_, z, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    }
+    if (pin_) {
+        SetWindowPos(pin_, z, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        InvalidateRect(pin_, nullptr, FALSE);
+    }
+    if (save)
+        SaveRegDword(L"AlwaysOnTop", enabled ? 1 : 0);
+}
+
+void App::update_pin_tooltip() {
+    if (!pin_tip_ || !pin_)
+        return;
+    TOOLINFOW info{};
+    info.cbSize = sizeof(info);
+    info.hwnd = pin_;
+    info.uId = reinterpret_cast<UINT_PTR>(pin_);
+    info.lpszText = const_cast<wchar_t*>(Tr(L"Always on Top"));
+    SendMessageW(pin_tip_, TTM_UPDATETIPTEXTW, 0, reinterpret_cast<LPARAM>(&info));
+}
+
+void App::place_pin_button() {
+    if (!pin_ || !hwnd_)
+        return;
+    if (fullscreen_ || IsIconic(hwnd_)) {
+        ShowWindow(pin_, SW_HIDE);
+        return;
+    }
+    RECT wr{};
+    GetWindowRect(hwnd_, &wr);
+    RECT buttons{};
+    const bool have_buttons =
+        SUCCEEDED(DwmGetWindowAttribute(hwnd_, DWMWA_CAPTION_BUTTON_BOUNDS, &buttons, sizeof(buttons))) &&
+        buttons.right > buttons.left && buttons.bottom > buttons.top;
+    int x = 0;
+    int y = 0;
+    int w = 0;
+    int h = 0;
+    if (have_buttons) {
+        h = buttons.bottom - buttons.top;
+        w = h;
+        const int slot = (buttons.right - buttons.left) / 3;
+        if (slot > 8 && w > slot)
+            w = slot;
+        x = wr.left + buttons.left - w;
+        y = wr.top + buttons.top;
+    } else {
+        const UINT dpi = GetDpiForWindow(hwnd_);
+        w = GetSystemMetricsForDpi(SM_CXSIZE, dpi);
+        h = GetSystemMetricsForDpi(SM_CYSIZE, dpi);
+        const int frame_x = GetSystemMetricsForDpi(SM_CXFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+        const int frame_y = GetSystemMetricsForDpi(SM_CYFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+        x = wr.right - frame_x - w * 4;
+        y = wr.top + frame_y;
+    }
+    if (w < 8 || h < 8)
+        return;
+    SetWindowPos(pin_, nullptr, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    InvalidateRect(pin_, nullptr, FALSE);
+}
+
+void App::refresh_track_menus() {
+    if (audio_menu_) {
+        while (GetMenuItemCount(audio_menu_) > 0)
+            DeleteMenu(audio_menu_, 0, MF_BYPOSITION);
+    }
+    audio_track_ids_.clear();
+    sub_track_ids_.clear();
+    if (subtitle_menu_) {
+        for (UINT id = ID_SUB_TRACK_FIRST; id <= ID_SUB_TRACK_LAST; ++id)
+            RemoveMenu(subtitle_menu_, id, MF_BYCOMMAND);
+        RemoveMenu(subtitle_menu_, ID_SUB_TRACK_OFF, MF_BYCOMMAND);
+        MENUITEMINFOW info{};
+        info.cbSize = sizeof(info);
+        info.fMask = MIIM_FTYPE;
+        if (GetMenuItemCount(subtitle_menu_) > 0 &&
+            GetMenuItemInfoW(subtitle_menu_, 0, TRUE, &info) && (info.fType & MFT_SEPARATOR))
+            RemoveMenu(subtitle_menu_, 0, MF_BYPOSITION);
+    }
+
+    const bool has_media = player_.state().has_media;
+    const std::vector<MediaTrack> tracks = has_media ? player_.media_tracks() : std::vector<MediaTrack>{};
+    int audio_count = 0;
+    bool any_sub_selected = false;
+    std::vector<MediaTrack> embedded_subs;
+    for (const MediaTrack& track : tracks) {
+        if (track.type == L"audio")
+            ++audio_count;
+        else if (track.type == L"sub") {
+            if (track.selected)
+                any_sub_selected = true;
+            if (!track.external)
+                embedded_subs.push_back(track);
+        }
+    }
+
+    if (audio_menu_ && audio_count >= 2) {
+        UINT index = 0;
+        for (const MediaTrack& track : tracks) {
+            if (track.type != L"audio")
+                continue;
+            if (index > ID_AUDIO_TRACK_LAST - ID_AUDIO_TRACK_FIRST)
+                break;
+            const UINT id = ID_AUDIO_TRACK_FIRST + index;
+            UINT flags = MF_STRING;
+            if (track.selected)
+                flags |= MF_CHECKED;
+            AppendMenuW(audio_menu_, flags, id, track_label(track).c_str());
+            audio_track_ids_.push_back(track.id);
+            ++index;
+        }
+    }
+    int stats_pos = -1;
+    if (playback_menu_) {
+        const int count = GetMenuItemCount(playback_menu_);
+        for (int i = 0; i < count; ++i) {
+            if (GetMenuItemID(playback_menu_, i) == ID_STATS_SHOW) {
+                stats_pos = i;
+                break;
+            }
+        }
+    }
+    SetPopupVisible(playback_menu_, audio_menu_, Tr(L"Audio"),
+                    stats_pos >= 0 ? stats_pos : GetMenuItemCount(playback_menu_), audio_count >= 2);
+
+    if (!embedded_subs.empty() && subtitle_menu_) {
+        int at = -1;
+        const int count = GetMenuItemCount(subtitle_menu_);
+        for (int i = 0; i < count; ++i) {
+            if (GetMenuItemID(subtitle_menu_, i) == ID_LOAD_SRT) {
+                at = i;
+                break;
+            }
+        }
+        if (at < 0)
+            at = GetMenuItemCount(subtitle_menu_);
+        UINT index = 0;
+        for (const MediaTrack& track : embedded_subs) {
+            if (index > ID_SUB_TRACK_LAST - ID_SUB_TRACK_FIRST)
+                break;
+            const UINT id = ID_SUB_TRACK_FIRST + index;
+            UINT flags = MF_BYPOSITION | MF_STRING;
+            if (track.selected)
+                flags |= MF_CHECKED;
+            InsertMenuW(subtitle_menu_, static_cast<UINT>(at), flags, id, track_label(track).c_str());
+            sub_track_ids_.push_back(track.id);
+            ++at;
+            ++index;
+        }
+        InsertMenuW(subtitle_menu_, static_cast<UINT>(at),
+                    MF_BYPOSITION | MF_STRING | (any_sub_selected ? 0 : MF_CHECKED), ID_SUB_TRACK_OFF,
+                    Tr(L"Off"));
+        ++at;
+        InsertMenuW(subtitle_menu_, static_cast<UINT>(at), MF_BYPOSITION | MF_SEPARATOR, 0, nullptr);
+    }
 }
 
 void App::exit_fullscreen() {
@@ -1908,6 +2630,7 @@ void App::exit_fullscreen() {
                  SWP_NOZORDER | SWP_FRAMECHANGED);
     fullscreen_ = false;
     layout();
+    place_pin_button();
 }
 
 void App::toggle_fullscreen() {
@@ -1931,7 +2654,7 @@ void App::enter_fullscreen(bool stretch) {
     MONITORINFO info{sizeof(info)};
     if (!GetMonitorInfoW(monitor, &info))
         return;
-    SetWindowPos(hwnd_, HWND_TOP, info.rcMonitor.left, info.rcMonitor.top,
+    SetWindowPos(hwnd_, always_on_top_ ? HWND_TOPMOST : HWND_TOP, info.rcMonitor.left, info.rcMonitor.top,
                  info.rcMonitor.right - info.rcMonitor.left,
                  info.rcMonitor.bottom - info.rcMonitor.top,
                  SWP_FRAMECHANGED);
@@ -2152,9 +2875,9 @@ void App::set_clip_mark_time(ClipMark mark, double time, bool announce) {
     const double shown = (clip_active_ == ClipMark::In) ? clip_in_ : clip_out_;
     player_.seek_absolute(shown);
     if (announce)
-        player_.show_osd((clip_active_ == ClipMark::In ? "Clip In: " : "Clip Out: ") +
-                             FormatTimeAscii(shown),
-                         900);
+        Osd(player_,
+            std::wstring(Tr(clip_active_ == ClipMark::In ? L"Clip In: " : L"Clip Out: ")) + FormatTime(shown),
+            900);
     update_seek_bar();
 }
 
@@ -2291,13 +3014,13 @@ LRESULT App::handle_seek_bar(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
         const COLORREF vol_color = playback.mute ? RGB(120, 120, 128) : RGB(120, 210, 150);
         draw_track(vol_left, vol_right, playback.mute ? 0.0 : (volume / 100.0), vol_color);
 
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, RGB(180, 188, 196));
+        HFONT font = CreateFontW(-MulDiv(9, dpi(), 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                 CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        HGDIOBJ old = SelectObject(dc, font);
         if (!live) {
-            SetBkMode(dc, TRANSPARENT);
-            SetTextColor(dc, RGB(180, 188, 196));
-            HFONT font = CreateFontW(-MulDiv(9, dpi(), 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                                     DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                     CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-            HGDIOBJ old = SelectObject(dc, font);
             const std::wstring left = FormatTime(position);
             const std::wstring right = FormatTime(duration > 0.0 ? duration : -1.0);
             RECT left_rect{pad, 0, pad + time_width - MulDiv(6, dpi(), 96), rect.bottom};
@@ -2305,9 +3028,13 @@ LRESULT App::handle_seek_bar(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
                             rect.bottom};
             DrawTextW(dc, left.c_str(), -1, &left_rect, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
             DrawTextW(dc, right.c_str(), -1, &right_rect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-            SelectObject(dc, old);
-            DeleteObject(font);
+        } else {
+            const wchar_t* live_text = Tr(L"Live");
+            RECT live_rect{pad, 0, vol_left - MulDiv(6, dpi(), 96), rect.bottom};
+            DrawTextW(dc, live_text, -1, &live_rect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         }
+        SelectObject(dc, old);
+        DeleteObject(font);
         EndPaint(hwnd, &paint);
         return 0;
     }
@@ -2348,9 +3075,9 @@ LRESULT App::handle_seek_bar(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
             clip_mark_from_point(GET_X_LPARAM(lparam));
             clip_dragging_ = ClipMark::None;
             if (clip_active_ == ClipMark::In)
-                player_.show_osd("Clip In: " + FormatTimeAscii(clip_in_), 900);
+                Osd(player_, std::wstring(Tr(L"Clip In: ")) + FormatTime(clip_in_), 900);
             else if (clip_active_ == ClipMark::Out)
-                player_.show_osd("Clip Out: " + FormatTimeAscii(clip_out_), 900);
+                Osd(player_, std::wstring(Tr(L"Clip Out: ")) + FormatTime(clip_out_), 900);
             ReleaseCapture();
             update_seek_bar();
         } else if (seeking_) {
@@ -2390,13 +3117,14 @@ void App::open_file() {
     OPENFILENAMEW dialog{};
     dialog.lStructSize = sizeof(dialog);
     dialog.hwndOwner = hwnd_;
-    dialog.lpstrFilter =
-        L"Media files\0*.mp4;*.mkv;*.avi;*.mov;*.webm;*.flv;*.ts;*.m2ts;*.m4v;*.wmv;*.mpg;*.mpeg;*.mp3;*.flac;*.wav;*.aac;*.ogg;*.opus;*.m4a;*.m3u;*.m3u8\0"
-        L"All files\0*.*\0";
+    const std::wstring filter = std::wstring(Tr(L"Media files")) + L'\0' +
+        L"*.mp4;*.mkv;*.avi;*.mov;*.webm;*.flv;*.ts;*.m2ts;*.m4v;*.wmv;*.mpg;*.mpeg;*.mp3;*.flac;*.wav;*.aac;*.ogg;*.opus;*.m4a;*.m3u;*.m3u8" +
+        L'\0' + std::wstring(Tr(L"All files")) + L'\0' + L"*.*" + L'\0';
+    dialog.lpstrFilter = filter.c_str();
     dialog.lpstrFile = buffer.data();
     dialog.nMaxFile = static_cast<DWORD>(buffer.size());
     dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_NOCHANGEDIR;
-    dialog.lpstrTitle = L"Open";
+    dialog.lpstrTitle = Tr(L"Open");
     if (!GetOpenFileNameW(&dialog))
         return;
     open_target(buffer.data());
@@ -2449,7 +3177,7 @@ void App::open_target(const std::wstring& target, bool auto_live_for_network) {
     if (!player_.load(target, network ? -1.0 : resume))
         update_title();
     else if (!network && resume >= 3.0)
-        player_.show_osd("Resumed " + FormatTimeAscii(resume), 1600);
+        Osd(player_, std::wstring(Tr(L"Resumed ")) + FormatTime(resume), 1600);
     last_resume_path_.clear();
     last_resume_pos_ = -1.0;
     sync_captions_media();
@@ -2459,17 +3187,23 @@ void App::open_target(const std::wstring& target, bool auto_live_for_network) {
 void App::show_about() {
     std::wstring text = L"upPlayer ";
     text += UPPLAYER_VERSION_STRINGW;
-    text += L"\n\nLightweight Win32 front-end for mpv.";
-    text += L"\nPlayback: ";
+    text += L"\n\n";
+    text += Tr(L"Lightweight Win32 front-end for mpv.");
+    text += L"\n";
+    text += Tr(L"Playback: ");
     text += player_.backend_label().empty() ? L"n/a" : player_.backend_label();
-    text += L"\n\nLicense: MIT (see LICENSE / NOTICE)";
-    MessageBoxW(hwnd_, text.c_str(), L"About upPlayer", MB_OK | MB_ICONINFORMATION);
+    text += L"\n\n";
+    text += Tr(L"License: MIT (see LICENSE / NOTICE)");
+    MessageBoxW(hwnd_, text.c_str(), Tr(L"About upPlayer"), MB_OK | MB_ICONINFORMATION);
 }
 void App::show_settings() {
     if (DialogBoxParamW(instance_, MAKEINTRESOURCEW(IDD_SETTINGS), hwnd_, SettingsDlgProc, 0) != IDOK)
         return;
+    LoadMenuLanguage();
+    apply_menu_language();
     player_.set_screenshot_directory(SnapshotDirectory());
-    player_.show_osd("Settings saved", 1400);
+    player_.set_screenshot_format(SnapshotFormat());
+    Osd(player_, L"Settings saved", 1400);
 }
 
 void App::restore_saved_volume() {
@@ -2529,12 +3263,12 @@ void App::toggle_captions() {
     captions_->set_enabled(on);
     if (on) {
         sync_captions_media();
-        player_.show_osd("Captions on", 1000);
+        Osd(player_, L"Captions on", 1000);
     } else {
         last_caption_osd_.clear();
         last_caption_osd_tick_ = 0;
         player_.clear_caption();
-        player_.show_osd("Captions off", 1000);
+        Osd(player_, L"Captions off", 1000);
     }
 }
 
@@ -2543,7 +3277,7 @@ void App::generate_srt() {
         return;
     if (captions_->srt_busy()) {
         captions_->cancel_generate_srt();
-        player_.show_osd("Cancelling subtitle...", 1600);
+        Osd(player_, L"Cancelling subtitle...", 1600);
         update_title();
         return;
     }
@@ -2557,18 +3291,18 @@ void App::generate_srt() {
     sync_captions_media();
     std::wstring error;
     if (!captions_->request_generate_srt(&error)) {
-        MessageBoxW(hwnd_, error.empty() ? L"Cannot start Generate Subtitle." : error.c_str(),
-                    L"upPlayer - Generate Subtitle", MB_OK | MB_ICONINFORMATION);
+        MessageBoxW(hwnd_, error.empty() ? Tr(L"Cannot start Generate Subtitle.") : error.c_str(),
+                    Tr(L"upPlayer - Generate Subtitle"), MB_OK | MB_ICONINFORMATION);
         return;
     }
-    player_.show_osd("Generating subtitle...", 2000);
+    Osd(player_, L"Generating subtitle...", 2000);
     update_title();
 }
 
 
 void App::load_srt() {
     if (!player_.state().has_media) {
-        MessageBoxW(hwnd_, L"Open a video first.", L"upPlayer - Load Subtitle",
+        MessageBoxW(hwnd_, Tr(L"Open a video first."), Tr(L"upPlayer - Load Subtitle"),
                     MB_OK | MB_ICONINFORMATION);
         return;
     }
@@ -2601,14 +3335,14 @@ void App::load_srt() {
     OPENFILENAMEW dialog{};
     dialog.lStructSize = sizeof(dialog);
     dialog.hwndOwner = hwnd_;
-    dialog.lpstrFilter =
-        L"Subtitle files\0*.srt;*.ass;*.ssa;*.vtt;*.sub\0"
-        L"SRT\0*.srt\0"
-        L"All files\0*.*\0";
+    const std::wstring filter = std::wstring(Tr(L"Subtitle files")) + L'\0' +
+                                L"*.srt;*.ass;*.ssa;*.vtt;*.sub" + L'\0' + L"SRT" + L'\0' + L"*.srt" +
+                                L'\0' + std::wstring(Tr(L"All files")) + L'\0' + L"*.*" + L'\0';
+    dialog.lpstrFilter = filter.c_str();
     dialog.lpstrFile = buffer.data();
     dialog.nMaxFile = static_cast<DWORD>(buffer.size());
     dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_NOCHANGEDIR;
-    dialog.lpstrTitle = L"Load Subtitle";
+    dialog.lpstrTitle = Tr(L"Load Subtitle");
     dialog.lpstrDefExt = L"srt";
     if (!initial_dir.empty())
         dialog.lpstrInitialDir = initial_dir.c_str();
@@ -2620,39 +3354,39 @@ void App::load_srt() {
 
 void App::load_subtitle_file(const std::wstring& path) {
     if (!player_.state().has_media) {
-        MessageBoxW(hwnd_, L"Open a video first.", L"upPlayer - Load Subtitle",
+        MessageBoxW(hwnd_, Tr(L"Open a video first."), Tr(L"upPlayer - Load Subtitle"),
                     MB_OK | MB_ICONINFORMATION);
         return;
     }
     std::wstring error;
     if (!player_.add_external_subtitle(path, &error)) {
-        MessageBoxW(hwnd_, error.empty() ? L"Failed to load subtitle." : error.c_str(),
-                    L"upPlayer - Load Subtitle", MB_OK | MB_ICONWARNING);
+        MessageBoxW(hwnd_, error.empty() ? Tr(L"Failed to load subtitle.") : error.c_str(),
+                    Tr(L"upPlayer - Load Subtitle"), MB_OK | MB_ICONWARNING);
         return;
     }
 
     const auto slash = path.find_last_of(L"\\/");
     const std::wstring name = slash == std::wstring::npos ? path : path.substr(slash + 1);
     external_subtitle_loaded_ = true;
-    player_.show_osd(WideToUtf8(L"Loaded: " + name), 1600);
+    Osd(player_, std::wstring(Tr(L"Loaded: ")) + name, 1600);
 }
 
 
 
 void App::clear_srt() {
     if (!player_.state().has_media) {
-        MessageBoxW(hwnd_, L"Open a video first.", L"upPlayer - Unload Subtitle",
+        MessageBoxW(hwnd_, Tr(L"Open a video first."), Tr(L"upPlayer - Unload Subtitle"),
                     MB_OK | MB_ICONINFORMATION);
         return;
     }
     std::wstring error;
     if (!player_.clear_external_subtitle(&error)) {
-        MessageBoxW(hwnd_, error.empty() ? L"Failed to unload subtitle." : error.c_str(),
-                    L"upPlayer - Unload Subtitle", MB_OK | MB_ICONWARNING);
+        MessageBoxW(hwnd_, error.empty() ? Tr(L"Failed to unload subtitle.") : error.c_str(),
+                    Tr(L"upPlayer - Unload Subtitle"), MB_OK | MB_ICONWARNING);
         return;
     }
     external_subtitle_loaded_ = false;
-    player_.show_osd("Unloaded subtitle", 1200);
+    Osd(player_, L"Unloaded subtitle", 1200);
 }
 
 void App::set_yolo_mode(YoloMode mode) {
@@ -2666,9 +3400,9 @@ void App::set_yolo_mode(YoloMode mode) {
     yolo_->set_mode(mode);
     if (mode == YoloMode::Off) {
         player_.clear_yolo_overlay();
-        player_.show_osd("YOLO26 off", 1000);
+        Osd(player_, L"YOLO26 off", 1000);
     } else {
-        player_.show_osd("YOLO26 on (skip busy frames)", 1400);
+        Osd(player_, L"YOLO26 on (skip busy frames)", 1400);
         tick_yolo();
     }
 }
@@ -2689,11 +3423,11 @@ void App::set_lightfc_mode(LightFcMode mode) {
     lightfc_->set_mode(mode);
     if (mode == LightFcMode::Off) {
         player_.clear_track_overlay();
-        player_.show_osd("LightFC off", 1000);
+        Osd(player_, L"LightFC off", 1000);
     } else if (mode == LightFcMode::Arm) {
-        player_.show_osd("LightFC: click a target", 1600);
+        Osd(player_, L"LightFC: click a target", 1600);
     } else {
-        player_.show_osd("LightFC tracking", 1200);
+        Osd(player_, L"LightFC tracking", 1200);
         tick_lightfc();
     }
     update_title();
@@ -2740,7 +3474,7 @@ bool App::lightfc_click_select(int client_x, int client_y) {
     box.score = 1.f;
     if (!lightfc_->init_at(box))
         return false;
-    player_.show_osd("LightFC: locking...", 1000);
+    Osd(player_, L"LightFC: locking...", 1000);
     tick_lightfc();
     return true;
 }
@@ -2912,7 +3646,7 @@ bool App::clip_session_active() const {
 void App::mark_clip_in() {
     const PlayerState playback = player_.state();
     if (!playback.has_media || !(playback.time_pos >= 0.0)) {
-        player_.show_osd("No media", 1000);
+        Osd(player_, L"No media", 1000);
         return;
     }
     player_.set_pause(true);
@@ -2922,7 +3656,7 @@ void App::mark_clip_in() {
 void App::mark_clip_out() {
     const PlayerState playback = player_.state();
     if (!playback.has_media || !(playback.time_pos >= 0.0)) {
-        player_.show_osd("No media", 1000);
+        Osd(player_, L"No media", 1000);
         return;
     }
     player_.set_pause(true);
@@ -2936,14 +3670,14 @@ void App::clear_clip_marks() {
     clip_out_ = -1.0;
     clip_active_ = ClipMark::None;
     clip_dragging_ = ClipMark::None;
-    player_.show_osd("Clip cancelled", 1000);
+    Osd(player_, L"Clip cancelled", 1000);
     update_seek_bar();
 }
 
 void App::handle_escape() {
     if (captions_ && captions_->srt_busy()) {
         captions_->cancel_generate_srt();
-        player_.show_osd("Cancelling subtitle...", 1600);
+        Osd(player_, L"Cancelling subtitle...", 1600);
         update_title();
         return;
     }
@@ -2972,12 +3706,12 @@ void App::nudge_clip_or_frame(int direction) {
 
 void App::export_clip() {
     if (!(clip_in_ >= 0.0) || !(clip_out_ > clip_in_)) {
-        player_.show_osd("Mark In (z) and Out (x) first", 1600);
+        Osd(player_, L"Mark In (z) and Out (x) first", 1600);
         return;
     }
     const std::wstring source = player_.current_path();
     if (source.empty() || IsNetworkTarget(source)) {
-        player_.show_osd("Export needs a local file", 1400);
+        Osd(player_, L"Export needs a local file", 1400);
         return;
     }
     const std::wstring mpv = FindExecutable(L"mpv.exe");
@@ -2985,7 +3719,7 @@ void App::export_clip() {
         MessageBoxW(hwnd_,
                     L"mpv.exe was not found.\n\n"
                     L"Place mpv.exe next to upPlayer.exe (release package includes it), or add it to PATH.",
-                    L"Export Clip", MB_OK | MB_ICONINFORMATION);
+                    Tr(L"Export Clip"), MB_OK | MB_ICONINFORMATION);
         return;
     }
 
@@ -3001,11 +3735,12 @@ void App::export_clip() {
     OPENFILENAMEW dialog{};
     dialog.lStructSize = sizeof(dialog);
     dialog.hwndOwner = hwnd_;
-    dialog.lpstrFilter = L"Media files\0*.*\0";
+    const std::wstring export_filter = std::wstring(Tr(L"Media files")) + L'\0' + L"*.*" + L'\0';
+    dialog.lpstrFilter = export_filter.c_str();
     dialog.lpstrFile = buffer.data();
     dialog.nMaxFile = static_cast<DWORD>(buffer.size());
     dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_NOCHANGEDIR;
-    dialog.lpstrTitle = L"Export Clip";
+    dialog.lpstrTitle = Tr(L"Export Clip");
     dialog.lpstrDefExt = L"mp4";
     if (!clip_dir.empty())
         dialog.lpstrInitialDir = clip_dir.c_str();
@@ -3023,7 +3758,7 @@ void App::export_clip() {
         QuoteCmd(mpv) + L" --no-config --vo=null --ao=null --sid=no --start=" + start_arg +
         L" --end=" + end_arg + L" --stream-record=" + QuoteCmd(output) + L" -- " + QuoteCmd(source);
 
-    player_.show_osd("Exporting clip...", 2000);
+    Osd(player_, L"Exporting clip...", 2000);
     DWORD exit_code = 1;
     std::wstring log_path;
     const bool started = RunProcessWait(command, exit_code, &log_path);
@@ -3043,12 +3778,12 @@ void App::export_clip() {
             }
             DeleteFileW(log_path.c_str());
         }
-        MessageBoxW(hwnd_, message.c_str(), L"Export Clip", MB_OK | MB_ICONWARNING);
+        MessageBoxW(hwnd_, message.c_str(), Tr(L"Export Clip"), MB_OK | MB_ICONWARNING);
         return;
     }
     if (!log_path.empty())
         DeleteFileW(log_path.c_str());
-    player_.show_osd("Clip exported. Start may move to the nearest keyframe", 2200);
+    Osd(player_, L"Clip exported. Start may move to the nearest keyframe", 2200);
 }
 
 LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
@@ -3077,6 +3812,26 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
             select_caption_language(cmd - ID_CAPTION_LANG_FIRST);
             return 0;
         }
+        if (cmd >= ID_AUDIO_TRACK_FIRST && cmd <= ID_AUDIO_TRACK_LAST) {
+            const size_t index = cmd - ID_AUDIO_TRACK_FIRST;
+            if (index < audio_track_ids_.size()) {
+                player_.select_track("aid", audio_track_ids_[index]);
+                wchar_t label[256] = {};
+                if (GetMenuStringW(audio_menu_, cmd, label, 256, MF_BYCOMMAND) > 0)
+                    Osd(player_, std::wstring(Tr(L"Audio: ")) + label, 1000);
+            }
+            return 0;
+        }
+        if (cmd >= ID_SUB_TRACK_FIRST && cmd <= ID_SUB_TRACK_LAST) {
+            const size_t index = cmd - ID_SUB_TRACK_FIRST;
+            if (index < sub_track_ids_.size()) {
+                player_.select_track("sid", sub_track_ids_[index]);
+                wchar_t label[256] = {};
+                if (GetMenuStringW(subtitle_menu_, cmd, label, 256, MF_BYCOMMAND) > 0)
+                    Osd(player_, std::wstring(Tr(L"Subtitle: ")) + label, 1000);
+            }
+            return 0;
+        }
         switch (cmd) {
         case ID_FILE_OPEN:
             open_file();
@@ -3086,6 +3841,13 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
             return 0;
         case ID_FILE_EXIT:
             DestroyWindow(hwnd);
+            return 0;
+        case ID_ALWAYS_ON_TOP:
+            set_always_on_top(!always_on_top_, true);
+            return 0;
+        case ID_SUB_TRACK_OFF:
+            player_.disable_subtitles();
+            Osd(player_, L"Subtitles off", 1000);
             return 0;
         case ID_SETTINGS:
             show_settings();
@@ -3257,20 +4019,20 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
             const bool loaded = !path.empty() && player_.add_external_subtitle(path, &load_error);
             if (loaded) {
                 external_subtitle_loaded_ = true;
-                player_.show_osd("Subtitle loaded", 1800);
+                Osd(player_, L"Subtitle loaded", 1800);
             } else {
-                player_.show_osd("SRT saved", 1800);
-                std::wstring body = L"Subtitle file saved:\r\n\r\n";
+                Osd(player_, L"SRT saved", 1800);
+                std::wstring body = Tr(L"Subtitle file saved:\r\n\r\n");
                 body += path.empty() ? status : path;
                 if (!load_error.empty()) {
                     body += L"\r\n\r\n";
                     body += load_error;
                 }
-                MessageBoxW(hwnd_, body.c_str(), L"upPlayer - Generate Subtitle",
+                MessageBoxW(hwnd_, body.c_str(), Tr(L"upPlayer - Generate Subtitle"),
                             MB_OK | MB_ICONINFORMATION);
             }
         } else if (code == 3 || status == L"Cancelled") {
-            player_.show_osd("Generate cancelled", 1600);
+            Osd(player_, L"Generate cancelled", 1600);
         } else if (code == 2) {
             if (status.rfind(L"missing:", 0) == 0 ||
                 status.find(L"Whisper model missing") != std::wstring::npos ||
@@ -3285,10 +4047,10 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
                 }
                 ShowWhisperModelLoadHelp(hwnd_, reason, expected);
             } else {
-                MessageBoxW(hwnd_, status.empty() ? L"Generate Subtitle failed." : status.c_str(),
-                            L"upPlayer - Generate Subtitle", MB_OK | MB_ICONWARNING);
+                MessageBoxW(hwnd_, status.empty() ? Tr(L"Generate Subtitle failed.") : status.c_str(),
+                            Tr(L"upPlayer - Generate Subtitle"), MB_OK | MB_ICONWARNING);
             }
-            player_.show_osd("SRT failed", 1600);
+            Osd(player_, L"SRT failed", 1600);
         } else if (!status.empty()) {
             std::string osd = WideToUtf8(status);
             if (osd.size() > 80)
@@ -3326,7 +4088,7 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
         }
         if (!subtitles.empty()) {
             if (!player_.state().has_media) {
-                MessageBoxW(hwnd_, L"Open a video first.", L"upPlayer - Load Subtitle",
+                MessageBoxW(hwnd_, Tr(L"Open a video first."), Tr(L"upPlayer - Load Subtitle"),
                             MB_OK | MB_ICONINFORMATION);
             } else {
                 for (const std::wstring& path : subtitles)
@@ -3335,6 +4097,17 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
         }
         return 0;
     }
+    case WM_WINDOWPOSCHANGED:
+        place_pin_button();
+        break;
+    case WM_ACTIVATE:
+        if (pin_ && LOWORD(wparam) != WA_INACTIVE)
+            InvalidateRect(pin_, nullptr, FALSE);
+        break;
+    case WM_DWMCOLORIZATIONCOLORCHANGED:
+        if (pin_)
+            InvalidateRect(pin_, nullptr, FALSE);
+        break;
     case WM_SIZE:
         if (wparam != SIZE_MINIMIZED)
             layout();
@@ -3374,6 +4147,12 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
             claim_keyboard_focus();
         break;
     case WM_TIMER:
+        if (wparam == kTimerPin) {
+            KillTimer(hwnd, kTimerPin);
+            if (pin_)
+                InvalidateRect(pin_, nullptr, FALSE);
+            return 0;
+        }
         if (wparam == kTimerStatus) {
             claim_keyboard_focus();
             update_title();
@@ -3406,6 +4185,10 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
 }
 
 }  // namespace
+
+std::string MenuTextUtf8(const wchar_t* english) {
+    return WideToUtf8(std::wstring(Tr(english)));
+}
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);

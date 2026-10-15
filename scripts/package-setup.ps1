@@ -5,6 +5,10 @@ param(
     [string]$OutDir = "",
     [string]$ReleaseTag = "latest",
     [string]$AppVersion = "",
+    # Include Whisper / YOLO / LightFC (AI). Use -IncludeAi:$false for the slim build.
+    [bool]$IncludeAi = $true,
+    # Filename suffix after the version, e.g. -AI or -noAI.
+    [string]$SetupSuffix = "",
     [switch]$SkipPackage,
     [switch]$NsisOnly,
     [switch]$InnoOnly,
@@ -27,15 +31,19 @@ function Get-UpPlayerVersion {
 if (-not $AppVersion) {
     $AppVersion = Get-UpPlayerVersion
 }
-Write-Host "AppVersion=$AppVersion"
+if (-not $SetupSuffix) {
+    $SetupSuffix = if ($IncludeAi) { "-AI" } else { "-noAI" }
+}
+Write-Host "AppVersion=$AppVersion SetupSuffix=$SetupSuffix IncludeAi=$IncludeAi"
 
 if (-not $OutDir) {
     $OutDir = Join-Path $Root "build\dist"
 }
-$PkgDir = Join-Path $OutDir "package"
+$PackageName = if ($IncludeAi) { "package" } else { "package-noAI" }
+$PkgDir = Join-Path $OutDir $PackageName
 $Nsi = Join-Path $PSScriptRoot "upPlayer.nsi"
 $Iss = Join-Path $PSScriptRoot "upPlayer.iss"
-$SetupOut = Join-Path $OutDir "upPlayer-Setup-x64-$AppVersion.exe"
+$SetupOut = Join-Path $OutDir "upPlayer-Setup-x64-$AppVersion$SetupSuffix.exe"
 
 function Find-MakeNsis {
     $candidates = @(
@@ -150,6 +158,7 @@ function Build-NsisSetup {
         "/DSOURCE_DIR=$PkgDir" `
         "/DOUT_DIR=$OutDir" `
         "/DAPP_VERSION=$AppVersion" `
+        "/DSETUP_SUFFIX=$SetupSuffix" `
         $Nsi
     if ($LASTEXITCODE -ne 0) {
         throw "makensis failed with exit code $LASTEXITCODE"
@@ -170,6 +179,7 @@ function Build-InnoSetup {
         "/DSourceDir=$PkgDir" `
         "/DOutputDir=$OutDir" `
         "/DAppVersion=$AppVersion" `
+        "/DSetupSuffix=$SetupSuffix" `
         $Iss
     if ($LASTEXITCODE -ne 0) {
         throw "ISCC failed with exit code $LASTEXITCODE"
@@ -247,7 +257,9 @@ if (-not $SkipPackage) {
     & (Join-Path $PSScriptRoot "package-release.ps1") `
         -Configuration $Configuration `
         -OutDir $OutDir `
-        -ReleaseTag $ReleaseTag
+        -ReleaseTag $ReleaseTag `
+        -IncludeAi:$IncludeAi `
+        -PackageName $PackageName
 }
 
 if (-not (Test-Path (Join-Path $PkgDir "upPlayer.exe"))) {

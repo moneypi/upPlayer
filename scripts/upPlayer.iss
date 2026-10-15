@@ -10,6 +10,9 @@
 #ifndef AppVersion
   #define AppVersion "1.0.0"
 #endif
+#ifndef SetupSuffix
+  #define SetupSuffix ""
+#endif
 
 #define MyAppName "upPlayer"
 #define MyAppPublisher "upPlayer"
@@ -31,7 +34,7 @@ DisableProgramGroupPage=yes
 LicenseFile=
 InfoBeforeFile=
 OutputDir={#OutputDir}
-OutputBaseFilename=upPlayer-Setup-x64-{#AppVersion}
+OutputBaseFilename=upPlayer-Setup-x64-{#AppVersion}{#SetupSuffix}
 SetupIconFile=..\src\upplayer.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2/ultra64

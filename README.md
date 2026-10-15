@@ -2,7 +2,7 @@
 
 Lightweight Windows video player front-end for [mpv](https://mpv.io/). Opens local files and network URLs, embeds playback in a Win32 window, and includes a simple seek bar.
 
-**Version:** 0.6.6 (right-click → **About upPlayer…**) — see [CHANGELOG](CHANGELOG.md)
+**Version:** 0.6.7 (right-click → **About upPlayer…**) — see [CHANGELOG](CHANGELOG.md)
 
 **License:** upPlayer source is [MIT](LICENSE). Third-party components (mpv, whisper.cpp, models) have their own terms — see [NOTICE](NOTICE).
 
@@ -30,20 +30,24 @@ Package a Windows zip (pulls official mpv Windows build + runtime DLLs):
 .\scripts\package-release.ps1
 ```
 
-Output: `build\dist\upPlayer-windows-x64.zip`
+Output: `build\dist\upPlayer-windows-x64-AI.zip` (or `-noAI` with `-IncludeAi:$false`)
 
-Build a Windows setup installer with **NSIS** (same Nullsoft installer family as PotPlayer; downloads NSIS if needed):
+Build both Windows setup installers (AI and no-AI):
 
 ```powershell
-.\scripts\package-setup.ps1
+.\scripts\package-both.ps1
 ```
 
-Output: `build\dist\upPlayer-Setup-x64-<version>.exe` (version from `src/version.hpp`; same files as the zip: `upPlayer.exe` + bundled mpv). The setup UI lets you choose the install folder and whether to launch upPlayer afterward (admin / UAC). NSIS script: `scripts\upPlayer.nsi` (when available); otherwise the WinForms SFX stub.
+Outputs:
+- `build\dist\upPlayer-Setup-x64-<version>-AI.exe` — Whisper, YOLO26, LightFC, ONNX Runtime
+- `build\dist\upPlayer-Setup-x64-<version>-noAI.exe` — player + mpv only
 
-Publish a GitHub release (tag + setup asset):
+Single variant: `.\scripts\package-setup.ps1 -IncludeAi:$true` or `-IncludeAi:$false`. The AI menu appears only when AI files are present next to the exe. Setup UI lets you choose the install folder (admin / UAC).
+
+Publish a GitHub release (tag + both setup assets):
 
 ```powershell
-.\scripts\package-setup.ps1
+.\scripts\package-both.ps1
 .\scripts\publish-release.ps1
 ```
 

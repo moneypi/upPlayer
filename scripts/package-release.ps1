@@ -4,7 +4,13 @@ param(
     [string]$Configuration = "Release",
     [string]$OutDir = "",
     # "latest" follows GitHub latest release; or pass a tag like "v0.41.0" / "git-release".
-    [string]$ReleaseTag = "latest"
+    [string]$ReleaseTag = "latest",
+    # Include Whisper / YOLO / LightFC / ONNX Runtime (AI build). Off = player + mpv only.
+    [bool]$IncludeAi = $true,
+    # Optional package folder name under OutDir (default: package or package-noAI).
+    [string]$PackageName = "",
+    # Optional zip file name under OutDir.
+    [string]$ZipName = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -127,9 +133,13 @@ if (-not $mpvExe) {
 }
 $mpvRoot = $mpvExe.Directory.FullName
 
-$PkgDir = Join-Path $OutDir "package"
+if (-not $PackageName) {
+    $PackageName = if ($IncludeAi) { "package" } else { "package-noAI" }
+}
+$PkgDir = Join-Path $OutDir $PackageName
 Remove-Item $PkgDir -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $PkgDir | Out-Null
+Write-Host "IncludeAi=$IncludeAi  package=$PkgDir"
 
 Copy-Item $Exe $PkgDir
 Copy-Item $mpvExe.FullName $PkgDir
@@ -152,73 +162,77 @@ foreach ($script in @("register-assoc.ps1", "install-payload.ps1")) {
     }
 }
 
-# MIT whisper.cpp CLI + model (preferred). See scripts\fetch-whisper-deps.ps1.
-$openWhisperCandidates = @(
-    (Join-Path (Split-Path $Exe -Parent) "whisper"),
-    (Join-Path $Root "third_party\whisper-win")
-)
-$openWhisper = $openWhisperCandidates | Where-Object {
-    (Test-Path (Join-Path $_ "whisper-cli.exe")) -or
-    (Test-Path (Join-Path $_ "main.exe")) -or
-    (Test-Path (Join-Path $_ "whisper.exe"))
-} | Select-Object -First 1
-if ($openWhisper) {
-    $dest = Join-Path $PkgDir "whisper"
-    New-Item -ItemType Directory -Force -Path $dest | Out-Null
-    Get-ChildItem $openWhisper -File | Copy-Item -Destination $dest -Force
-    $modelsSrc = Join-Path $openWhisper "models"
-    if (Test-Path $modelsSrc) {
-        New-Item -ItemType Directory -Force -Path (Join-Path $dest "models") | Out-Null
-        Copy-Item (Join-Path $modelsSrc "*") (Join-Path $dest "models") -Force
+if ($IncludeAi) {
+    # MIT whisper.cpp CLI + model (preferred). See scripts\fetch-whisper-deps.ps1.
+    $openWhisperCandidates = @(
+        (Join-Path (Split-Path $Exe -Parent) "whisper"),
+        (Join-Path $Root "third_party\whisper-win")
+    )
+    $openWhisper = $openWhisperCandidates | Where-Object {
+        (Test-Path (Join-Path $_ "whisper-cli.exe")) -or
+        (Test-Path (Join-Path $_ "main.exe")) -or
+        (Test-Path (Join-Path $_ "whisper.exe"))
+    } | Select-Object -First 1
+    if ($openWhisper) {
+        $dest = Join-Path $PkgDir "whisper"
+        New-Item -ItemType Directory -Force -Path $dest | Out-Null
+        Get-ChildItem $openWhisper -File | Copy-Item -Destination $dest -Force
+        $modelsSrc = Join-Path $openWhisper "models"
+        if (Test-Path $modelsSrc) {
+            New-Item -ItemType Directory -Force -Path (Join-Path $dest "models") | Out-Null
+            Copy-Item (Join-Path $modelsSrc "*") (Join-Path $dest "models") -Force
+        }
+        Write-Host "Including open whisper.cpp from $openWhisper"
+    } else {
+        Write-Host "Open whisper.cpp not found; run scripts\fetch-whisper-deps.ps1 for caption support."
     }
-    Write-Host "Including open whisper.cpp from $openWhisper"
+
+    # PotPlayer Whisper is proprietary — never auto-ship. Optional local-only leftover is ignored.
+
+    # YOLO26 (optional): onnx next to build + ONNX Runtime DLLs
+    $yoloOnnxCandidates = @(
+        (Join-Path (Split-Path $Exe -Parent) "yolo26\yolo26n.onnx"),
+        (Join-Path $Root "third_party\yolo26\yolo26n.onnx")
+    )
+    $yoloOnnx = $yoloOnnxCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if ($yoloOnnx) {
+        $yoloDest = Join-Path $PkgDir "yolo26"
+        New-Item -ItemType Directory -Force -Path $yoloDest | Out-Null
+        Copy-Item $yoloOnnx (Join-Path $yoloDest "yolo26n.onnx") -Force
+        Write-Host "Including YOLO26 model $yoloOnnx"
+    }
+    $ortDllCandidates = @(
+        (Join-Path (Split-Path $Exe -Parent) "onnxruntime.dll"),
+        (Join-Path $Root "third_party\onnxruntime\lib\onnxruntime.dll")
+    )
+    $ortDll = $ortDllCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if ($ortDll) {
+        Copy-Item $ortDll $PkgDir -Force
+        $shared = Join-Path (Split-Path $ortDll -Parent) "onnxruntime_providers_shared.dll"
+        if (Test-Path $shared) { Copy-Item $shared $PkgDir -Force }
+        Write-Host "Including ONNX Runtime from $(Split-Path $ortDll -Parent)"
+    }
+
+    # LightFC (optional)
+    $lfcZCandidates = @(
+        (Join-Path (Split-Path $Exe -Parent) "lightfc\lightfc_z.onnx"),
+        (Join-Path $Root "third_party\lightfc\lightfc_z.onnx")
+    )
+    $lfcXCandidates = @(
+        (Join-Path (Split-Path $Exe -Parent) "lightfc\lightfc_x.onnx"),
+        (Join-Path $Root "third_party\lightfc\lightfc_x.onnx")
+    )
+    $lfcZ = $lfcZCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    $lfcX = $lfcXCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if ($lfcZ -and $lfcX) {
+        $lfcDest = Join-Path $PkgDir "lightfc"
+        New-Item -ItemType Directory -Force -Path $lfcDest | Out-Null
+        Copy-Item $lfcZ (Join-Path $lfcDest "lightfc_z.onnx") -Force
+        Copy-Item $lfcX (Join-Path $lfcDest "lightfc_x.onnx") -Force
+        Write-Host "Including LightFC models"
+    }
 } else {
-    Write-Host "Open whisper.cpp not found; run scripts\fetch-whisper-deps.ps1 for caption support."
-}
-
-# PotPlayer Whisper is proprietary — never auto-ship. Optional local-only leftover is ignored.
-
-# YOLO26 (optional): onnx next to build + ONNX Runtime DLLs
-$yoloOnnxCandidates = @(
-    (Join-Path (Split-Path $Exe -Parent) "yolo26\yolo26n.onnx"),
-    (Join-Path $Root "third_party\yolo26\yolo26n.onnx")
-)
-$yoloOnnx = $yoloOnnxCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-if ($yoloOnnx) {
-    $yoloDest = Join-Path $PkgDir "yolo26"
-    New-Item -ItemType Directory -Force -Path $yoloDest | Out-Null
-    Copy-Item $yoloOnnx (Join-Path $yoloDest "yolo26n.onnx") -Force
-    Write-Host "Including YOLO26 model $yoloOnnx"
-}
-$ortDllCandidates = @(
-    (Join-Path (Split-Path $Exe -Parent) "onnxruntime.dll"),
-    (Join-Path $Root "third_party\onnxruntime\lib\onnxruntime.dll")
-)
-$ortDll = $ortDllCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-if ($ortDll) {
-    Copy-Item $ortDll $PkgDir -Force
-    $shared = Join-Path (Split-Path $ortDll -Parent) "onnxruntime_providers_shared.dll"
-    if (Test-Path $shared) { Copy-Item $shared $PkgDir -Force }
-    Write-Host "Including ONNX Runtime from $(Split-Path $ortDll -Parent)"
-}
-
-# LightFC (optional)
-$lfcZCandidates = @(
-    (Join-Path (Split-Path $Exe -Parent) "lightfc\lightfc_z.onnx"),
-    (Join-Path $Root "third_party\lightfc\lightfc_z.onnx")
-)
-$lfcXCandidates = @(
-    (Join-Path (Split-Path $Exe -Parent) "lightfc\lightfc_x.onnx"),
-    (Join-Path $Root "third_party\lightfc\lightfc_x.onnx")
-)
-$lfcZ = $lfcZCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-$lfcX = $lfcXCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-if ($lfcZ -and $lfcX) {
-    $lfcDest = Join-Path $PkgDir "lightfc"
-    New-Item -ItemType Directory -Force -Path $lfcDest | Out-Null
-    Copy-Item $lfcZ (Join-Path $lfcDest "lightfc_z.onnx") -Force
-    Copy-Item $lfcX (Join-Path $lfcDest "lightfc_x.onnx") -Force
-    Write-Host "Including LightFC models"
+    Write-Host "Skipping Whisper / YOLO / LightFC / ONNX Runtime (no-AI package)."
 }
 
 $fonts = Join-Path $mpvRoot "mpv\fonts.conf"
@@ -242,7 +256,10 @@ Run: upPlayer.exe
 "@
 [IO.File]::WriteAllText((Join-Path $PkgDir "README.txt"), $Readme, (New-Object Text.UTF8Encoding $false))
 
-$Zip = Join-Path $OutDir "upPlayer-windows-x64.zip"
+if (-not $ZipName) {
+    $ZipName = if ($IncludeAi) { "upPlayer-windows-x64-AI.zip" } else { "upPlayer-windows-x64-noAI.zip" }
+}
+$Zip = Join-Path $OutDir $ZipName
 Remove-Item $Zip -Force -ErrorAction SilentlyContinue
 Compress-Archive -Path (Join-Path $PkgDir '*') -DestinationPath $Zip -Force
 
