@@ -13,11 +13,11 @@ $setup = Join-Path $PSScriptRoot "package-setup.ps1"
 
 Write-Host "=== Building AI setup ==="
 & $setup -Configuration $Configuration -OutDir $OutDir -ReleaseTag $ReleaseTag `
-    -AppVersion $AppVersion -IncludeAi:$true -SetupSuffix "-AI" -SkipPackage:$SkipPackage
+    -AppVersion $AppVersion -IncludeAi $true -SetupSuffix "-AI" -SkipPackage:$SkipPackage
 
 Write-Host "=== Building no-AI setup ==="
 & $setup -Configuration $Configuration -OutDir $OutDir -ReleaseTag $ReleaseTag `
-    -AppVersion $AppVersion -IncludeAi:$false -SetupSuffix "-noAI" -SkipPackage:$SkipPackage
+    -AppVersion $AppVersion -IncludeAi $false -SetupSuffix "" -SkipPackage:$SkipPackage
 
 if (-not $OutDir) {
     $OutDir = Join-Path $Root "build\dist"
@@ -30,6 +30,6 @@ if (-not $AppVersion) {
 }
 
 $ai = Join-Path $OutDir "upPlayer-Setup-x64-$AppVersion-AI.exe"
-$noAi = Join-Path $OutDir "upPlayer-Setup-x64-$AppVersion-noAI.exe"
+$noAi = Join-Path $OutDir "upPlayer-Setup-x64-$AppVersion.exe"
 Write-Host "AI:   $ai ($((Get-Item $ai).Length) bytes)"
 Write-Host "noAI: $noAi ($((Get-Item $noAi).Length) bytes)"

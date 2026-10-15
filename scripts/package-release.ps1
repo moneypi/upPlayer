@@ -257,7 +257,7 @@ Run: upPlayer.exe
 [IO.File]::WriteAllText((Join-Path $PkgDir "README.txt"), $Readme, (New-Object Text.UTF8Encoding $false))
 
 if (-not $ZipName) {
-    $ZipName = if ($IncludeAi) { "upPlayer-windows-x64-AI.zip" } else { "upPlayer-windows-x64-noAI.zip" }
+    $ZipName = if ($IncludeAi) { "upPlayer-windows-x64-AI.zip" } else { "upPlayer-windows-x64.zip" }
 }
 $Zip = Join-Path $OutDir $ZipName
 Remove-Item $Zip -Force -ErrorAction SilentlyContinue

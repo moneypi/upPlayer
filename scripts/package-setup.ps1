@@ -31,8 +31,9 @@ function Get-UpPlayerVersion {
 if (-not $AppVersion) {
     $AppVersion = Get-UpPlayerVersion
 }
-if (-not $SetupSuffix) {
-    $SetupSuffix = if ($IncludeAi) { "-AI" } else { "-noAI" }
+if (-not $PSBoundParameters.ContainsKey('SetupSuffix')) {
+    # AI build keeps an -AI suffix; the slim build is the plain versioned name.
+    $SetupSuffix = if ($IncludeAi) { "-AI" } else { "" }
 }
 Write-Host "AppVersion=$AppVersion SetupSuffix=$SetupSuffix IncludeAi=$IncludeAi"
 

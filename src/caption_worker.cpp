@@ -87,6 +87,32 @@ std::wstring FindMpv() {
     return {};
 }
 
+bool StartsWithCi(const std::wstring& text, const wchar_t* prefix) {
+    const size_t n = wcslen(prefix);
+    if (text.size() < n)
+        return false;
+    for (size_t i = 0; i < n; ++i) {
+        wchar_t a = text[i];
+        wchar_t b = prefix[i];
+        if (a >= L'A' && a <= L'Z')
+            a = static_cast<wchar_t>(a - L'A' + L'a');
+        if (b >= L'A' && b <= L'Z')
+            b = static_cast<wchar_t>(b - L'A' + L'a');
+        if (a != b)
+            return false;
+    }
+    return true;
+}
+
+// Live streams cannot seek; caption by recording from the live edge on a second mpv.
+// HTTP(S) file URLs keep the seek-based path used for local files.
+bool IsLiveStreamUrl(const std::wstring& path) {
+    return StartsWithCi(path, L"rtsp://") || StartsWithCi(path, L"rtsps://") ||
+           StartsWithCi(path, L"rtmp://") || StartsWithCi(path, L"rtmps://") ||
+           StartsWithCi(path, L"rtp://") || StartsWithCi(path, L"udp://") ||
+           StartsWithCi(path, L"srt://");
+}
+
 bool IsBreakChar(wchar_t c) {
     return c == L' ' || c == L'\t' || c == L'\n' || c == L'\r' || c == L',' || c == L'.' ||
            c == L'!' || c == L'?' || c == L';' || c == L':' ||
@@ -548,6 +574,68 @@ bool CaptionWorker::extract_pcm_from(const std::wstring& media, double start, do
     }
     return true;
 }
+
+bool CaptionWorker::extract_pcm_live(const std::wstring& media, double length,
+                                     const std::wstring& wav_path, std::wstring* error) {
+    const std::wstring mpv = FindMpv();
+    if (mpv.empty()) {
+        if (error)
+            *error = L"mpv.exe not found (needed to extract audio for captions)";
+        return false;
+    }
+    if (media.empty()) {
+        if (error)
+            *error = L"No media";
+        return false;
+    }
+
+    DeleteFileW(wav_path.c_str());
+    wchar_t len_arg[64];
+    swprintf_s(len_arg, L"%.3f", (std::max)(0.5, length));
+
+    // Second connection at the live edge only — never --start (live cannot seek).
+    // Match the player's low-latency flags so this pull is not ~10s behind the picture.
+    // Video stays on the primary player; caption delay comes from record + Whisper time.
+    std::wstring command = Quote(mpv) + L" --no-config --vo=null --no-video --untimed";
+    if (StartsWithCi(media, L"rtsp://") || StartsWithCi(media, L"rtsps://") ||
+        StartsWithCi(media, L"rtmp://") || StartsWithCi(media, L"rtmps://"))
+        command += L" --profile=low-latency";
+    command += L" --length=";
+    command += len_arg;
+    command += L" --of=wav --oac=pcm_s16le --o=";
+    command += Quote(wav_path);
+    command += L" -- ";
+    command += Quote(media);
+
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    PROCESS_INFORMATION pi{};
+    std::wstring mutable_cmd = command;
+    const DWORD timeout_ms = static_cast<DWORD>((std::max)(30.0, length + 25.0) * 1000.0);
+    if (!CreateProcessW(nullptr, mutable_cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr,
+                        nullptr, &si, &pi)) {
+        if (error)
+            *error = L"Failed to start live audio extract";
+        return false;
+    }
+    WaitForSingleObject(pi.hProcess, timeout_ms);
+    DWORD exit_code = 1;
+    GetExitCodeProcess(pi.hProcess, &exit_code);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+
+    WIN32_FILE_ATTRIBUTE_DATA info{};
+    const bool ok = GetFileAttributesExW(wav_path.c_str(), GetFileExInfoStandard, &info) &&
+                    (info.nFileSizeLow > 44 || info.nFileSizeHigh > 0);
+    if (!ok) {
+        if (error)
+            *error = exit_code != 0 ? L"Live audio extract failed" : L"Empty WAV from live extract";
+        return false;
+    }
+    return true;
+}
 void CaptionWorker::thread_main() {
     while (true) {
         std::wstring media;
@@ -590,6 +678,8 @@ void CaptionWorker::thread_main() {
             // If ASR is only a little behind, keep going sequentially (no gaps).
             // Jump only when hopelessly behind; leave a lead window so catch-up still
             // captions recent speech instead of discarding everything up to now.
+            // Live streams still use this to drop backlog; the next capture is always
+            // from the live edge (not a seek to covered_until_).
             if (playhead > start + kMaxLagBeforeCatchUp) {
                 const double jump_to = (std::max)(0.0, playhead - kLeadSec);
                 CapDiag("event=SKIP_CATCHUP playhead=%.3f covered=%.3f lag=%.3f -> jump_to=%.3f", playhead,
@@ -603,13 +693,19 @@ void CaptionWorker::thread_main() {
         if (!enabled || media.empty())
             continue;
 
+        const bool live = IsLiveStreamUrl(media);
+
         double playhead_at_job = 0.0;
         {
             std::lock_guard<std::mutex> lock(mu_);
             playhead_at_job = time_pos_;
         }
-        CapDiag("event=JOB_BEGIN playhead=%.3f covered=%.3f lag=%.3f chunk_start=%.3f backend=%s",
-                playhead_at_job, start, playhead_at_job - start, start,
+        // Live: map this chunk onto the playhead when recording starts (second pull =
+        // live edge). Local: start is the file position from covered_until_.
+        if (live)
+            start = playhead_at_job;
+        CapDiag("event=JOB_BEGIN playhead=%.3f covered=%.3f lag=%.3f chunk_start=%.3f live=%d backend=%s",
+                playhead_at_job, start, playhead_at_job - start, start, live ? 1 : 0,
                 WideToUtf8(whisper_.backend_label()).c_str());
 
         {
@@ -642,7 +738,7 @@ void CaptionWorker::thread_main() {
             continue;
         }
 
-        if (duration > 0.0 && start >= duration - 0.05) {
+        if (!live && duration > 0.0 && start >= duration - 0.05) {
             std::lock_guard<std::mutex> lock(mu_);
             status_ = CaptionStatus::Ready;
             status_text_.clear();
@@ -650,7 +746,7 @@ void CaptionWorker::thread_main() {
         }
 
         double length = kChunkSec;
-        if (duration > 0.0)
+        if (!live && duration > 0.0)
             length = (std::min)(length, duration - start);
         if (length < 0.35)
             continue;
@@ -673,12 +769,14 @@ void CaptionWorker::thread_main() {
 
         std::wstring extract_error;
         const auto t_extract0 = SteadyClock::now();
-        const bool extracted = extract_pcm(start, length, wav_path, &extract_error);
+        const bool extracted =
+            live ? extract_pcm_live(media, length, wav_path, &extract_error)
+                 : extract_pcm(start, length, wav_path, &extract_error);
         const double extract_ms =
             std::chrono::duration<double, std::milli>(SteadyClock::now() - t_extract0).count();
         if (!extracted) {
-            CapDiag("event=EXTRACT_FAIL playhead=%.3f chunk_start=%.3f chunk_len=%.3f extract_ms=%.0f",
-                    playhead_at_job, start, length, extract_ms);
+            CapDiag("event=EXTRACT_FAIL playhead=%.3f chunk_start=%.3f chunk_len=%.3f live=%d extract_ms=%.0f",
+                    playhead_at_job, start, length, live ? 1 : 0, extract_ms);
             DeleteFileW(wav_path.c_str());
             std::lock_guard<std::mutex> lock(mu_);
             if (!enabled_)

@@ -6,7 +6,7 @@
 - Settings polish; snapshot format JPEG or PNG
 - Audio track menu (when 2+ tracks) and embedded subtitle list with Off
 - Live label on the seek bar; Always on Top pin on the title bar
-- Two installers: **AI** (Whisper / YOLO / LightFC) and **noAI** (player + mpv only)
+- Two installers: **AI** (Whisper with ggml-tiny / YOLO / LightFC) and plain (player + mpv only)
 
 ## 0.6.6
 

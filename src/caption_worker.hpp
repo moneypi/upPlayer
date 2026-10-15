@@ -80,6 +80,9 @@ private:
     bool extract_pcm(double start, double length, const std::wstring& wav_path, std::wstring* error);
     bool extract_pcm_from(const std::wstring& media, double start, double length,
                           const std::wstring& wav_path, std::wstring* error);
+    // Live/network: record from the live edge (no seek). Local files keep extract_pcm.
+    bool extract_pcm_live(const std::wstring& media, double length, const std::wstring& wav_path,
+                          std::wstring* error);
     static std::wstring utf8_to_wide(const std::string& text);
     static std::string wide_to_utf8(const std::wstring& text);
     static std::wstring suggest_srt_path(const std::wstring& media);

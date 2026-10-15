@@ -39,10 +39,10 @@ Build both Windows setup installers (AI and no-AI):
 ```
 
 Outputs:
-- `build\dist\upPlayer-Setup-x64-<version>-AI.exe` — Whisper, YOLO26, LightFC, ONNX Runtime
-- `build\dist\upPlayer-Setup-x64-<version>-noAI.exe` — player + mpv only
+- `build\dist\upPlayer-Setup-x64-<version>-AI.exe` — Whisper (ggml-tiny), YOLO26, LightFC, ONNX Runtime
+- `build\dist\upPlayer-Setup-x64-<version>.exe` — player + mpv only
 
-Single variant: `.\scripts\package-setup.ps1 -IncludeAi:$true` or `-IncludeAi:$false`. The AI menu appears only when AI files are present next to the exe. Setup UI lets you choose the install folder (admin / UAC).
+Single variant: `.\scripts\package-setup.ps1 -IncludeAi $true` or `-IncludeAi $false`. The AI menu appears only when AI files are present next to the exe. Setup UI lets you choose the install folder (admin / UAC).
 
 Publish a GitHub release (tag + both setup assets):
 

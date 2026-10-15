@@ -25,7 +25,7 @@ if (-not $Version) {
 $Tag = "v$Version"
 $OutDir = Join-Path $Root "build\dist"
 $aiVersioned = Join-Path $OutDir "upPlayer-Setup-x64-$Version-AI.exe"
-$noAiVersioned = Join-Path $OutDir "upPlayer-Setup-x64-$Version-noAI.exe"
+$noAiVersioned = Join-Path $OutDir "upPlayer-Setup-x64-$Version.exe"
 
 if (-not $AiSetupPath) { $AiSetupPath = $aiVersioned }
 if (-not $NoAiSetupPath) { $NoAiSetupPath = $noAiVersioned }
@@ -62,8 +62,8 @@ Two Windows setup installers (choose folder; Finish / Start). Default: ``C:\Prog
 
 | Installer | Contents |
 |-----------|----------|
-| ``upPlayer-Setup-x64-$Version-AI.exe`` | Player + mpv + Whisper + YOLO26 + LightFC |
-| ``upPlayer-Setup-x64-$Version-noAI.exe`` | Player + mpv only (smaller) |
+| ``upPlayer-Setup-x64-$Version-AI.exe`` | Player + mpv + Whisper (ggml-tiny) + YOLO26 + LightFC |
+| ``upPlayer-Setup-x64-$Version.exe`` | Player + mpv only (smaller) |
 
 ### Changes
 $notesBody
