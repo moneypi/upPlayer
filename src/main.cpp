@@ -34,6 +34,10 @@ constexpr int kSeekBarId = 3001;
 #define DWMWA_USE_IMMERSIVE_DARK_MODE 20
 #endif
 
+#ifndef MFS_HIDDEN
+#define MFS_HIDDEN 0x00000008L
+#endif
+
 std::wstring Trim(std::wstring text) {
     auto space = [](wchar_t c) { return c == L' ' || c == L'\t' || c == L'\r' || c == L'\n'; };
     while (!text.empty() && space(text.front()))
@@ -201,6 +205,164 @@ std::wstring ReadTextFileHead(const std::wstring& path, size_t max_chars = 800) 
     return wide;
 }
 
+DWORD LoadRegDword(const wchar_t* name, DWORD fallback) {
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\upPlayer", 0, KEY_READ, &key) != ERROR_SUCCESS)
+        return fallback;
+    DWORD type = 0;
+    DWORD value = 0;
+    DWORD size = sizeof(value);
+    const LONG ok = RegQueryValueExW(key, name, nullptr, &type, reinterpret_cast<LPBYTE>(&value), &size);
+    RegCloseKey(key);
+    if (ok != ERROR_SUCCESS || type != REG_DWORD)
+        return fallback;
+    return value;
+}
+
+void SaveRegDword(const wchar_t* name, DWORD value) {
+    HKEY key = nullptr;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\upPlayer", 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key,
+                        nullptr) != ERROR_SUCCESS)
+        return;
+    RegSetValueExW(key, name, 0, REG_DWORD, reinterpret_cast<const BYTE*>(&value), sizeof(value));
+    RegCloseKey(key);
+}
+
+std::wstring LoadAppRegString(const wchar_t* name) {
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\upPlayer", 0, KEY_READ, &key) != ERROR_SUCCESS)
+        return {};
+    wchar_t buffer[1024] = {};
+    DWORD type = 0;
+    DWORD size = sizeof(buffer);
+    const LONG ok = RegQueryValueExW(key, name, nullptr, &type, reinterpret_cast<LPBYTE>(buffer), &size);
+    RegCloseKey(key);
+    if (ok != ERROR_SUCCESS || (type != REG_SZ && type != REG_EXPAND_SZ))
+        return {};
+    return buffer;
+}
+
+void SaveAppRegString(const wchar_t* name, const std::wstring& value) {
+    HKEY key = nullptr;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\upPlayer", 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key,
+                        nullptr) != ERROR_SUCCESS)
+        return;
+    RegSetValueExW(key, name, 0, REG_SZ, reinterpret_cast<const BYTE*>(value.c_str()),
+                   static_cast<DWORD>((value.size() + 1) * sizeof(wchar_t)));
+    RegCloseKey(key);
+}
+
+size_t MaxRecentUrls() {
+    DWORD n = LoadRegDword(L"RecentUrlLimit", 10);
+    if (n < 1)
+        n = 1;
+    if (n > 20)
+        n = 20;
+    return static_cast<size_t>(n);
+}
+
+bool DefaultNetworkLowLatency() {
+    return LoadRegDword(L"NetworkLowLatency", 1) != 0;
+}
+
+std::vector<std::wstring> LoadRecentUrls() {
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\upPlayer", 0, KEY_READ, &key) != ERROR_SUCCESS)
+        return {};
+    DWORD type = 0;
+    DWORD size = 0;
+    if (RegQueryValueExW(key, L"RecentUrls", nullptr, &type, nullptr, &size) != ERROR_SUCCESS ||
+        type != REG_MULTI_SZ || size < sizeof(wchar_t)) {
+        RegCloseKey(key);
+        return {};
+    }
+    std::vector<wchar_t> buffer(size / sizeof(wchar_t) + 2, L'\0');
+    if (RegQueryValueExW(key, L"RecentUrls", nullptr, &type, reinterpret_cast<LPBYTE>(buffer.data()), &size) !=
+        ERROR_SUCCESS) {
+        RegCloseKey(key);
+        return {};
+    }
+    RegCloseKey(key);
+    std::vector<std::wstring> urls;
+    size_t i = 0;
+    while (i < buffer.size() && buffer[i] != L'\0') {
+        const std::wstring item = Trim(&buffer[i]);
+        i += wcslen(&buffer[i]) + 1;
+        if (!item.empty())
+            urls.push_back(item);
+        if (urls.size() >= MaxRecentUrls())
+            break;
+    }
+    return urls;
+}
+
+void SaveRecentUrls(const std::vector<std::wstring>& urls) {
+    HKEY key = nullptr;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\upPlayer", 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key,
+                        nullptr) != ERROR_SUCCESS)
+        return;
+    std::wstring blob;
+    const size_t count = (std::min)(urls.size(), MaxRecentUrls());
+    for (size_t i = 0; i < count; ++i) {
+        blob += urls[i];
+        blob.push_back(L'\0');
+    }
+    blob.push_back(L'\0');
+    RegSetValueExW(key, L"RecentUrls", 0, REG_MULTI_SZ, reinterpret_cast<const BYTE*>(blob.c_str()),
+                   static_cast<DWORD>(blob.size() * sizeof(wchar_t)));
+    RegCloseKey(key);
+}
+
+void RememberRecentUrl(const std::wstring& url) {
+    const std::wstring trimmed = Trim(url);
+    if (trimmed.empty())
+        return;
+    std::vector<std::wstring> urls = LoadRecentUrls();
+    urls.erase(std::remove_if(urls.begin(), urls.end(),
+                              [&](const std::wstring& item) {
+                                  return _wcsicmp(item.c_str(), trimmed.c_str()) == 0;
+                              }),
+               urls.end());
+    urls.insert(urls.begin(), trimmed);
+    if (urls.size() > MaxRecentUrls())
+        urls.resize(MaxRecentUrls());
+    SaveRecentUrls(urls);
+}
+
+bool RemoveRecentUrl(const std::wstring& url) {
+    const std::wstring trimmed = Trim(url);
+    if (trimmed.empty())
+        return false;
+    std::vector<std::wstring> urls = LoadRecentUrls();
+    const size_t before = urls.size();
+    urls.erase(std::remove_if(urls.begin(), urls.end(),
+                              [&](const std::wstring& item) {
+                                  return _wcsicmp(item.c_str(), trimmed.c_str()) == 0;
+                              }),
+               urls.end());
+    if (urls.size() == before)
+        return false;
+    SaveRecentUrls(urls);
+    return true;
+}
+
+void ClearRecentUrls() {
+    SaveRecentUrls({});
+}
+
+void FillRecentUrlCombo(HWND combo) {
+    if (!combo)
+        return;
+    SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+    const std::vector<std::wstring> recent = LoadRecentUrls();
+    for (const std::wstring& item : recent)
+        SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(item.c_str()));
+    if (!recent.empty())
+        SetWindowTextW(combo, recent.front().c_str());
+    else
+        SetWindowTextW(combo, L"");
+}
+
 struct UrlDialogResult {
     std::wstring url;
     bool low_latency = true;
@@ -210,10 +372,14 @@ INT_PTR CALLBACK UrlDlgProc(HWND dialog, UINT message, WPARAM wparam, LPARAM lpa
     switch (message) {
     case WM_INITDIALOG: {
         SetWindowLongPtrW(dialog, DWLP_USER, lparam);
-        HWND edit = GetDlgItem(dialog, IDC_URL);
-        SendMessageW(edit, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(L"https://example.com/video.mp4"));
-        CheckDlgButton(dialog, IDC_LOW_LATENCY, BST_CHECKED);
-        SetFocus(edit);
+        HWND combo = GetDlgItem(dialog, IDC_URL);
+        FillRecentUrlCombo(combo);
+        HWND edit = FindWindowExW(combo, nullptr, L"Edit", nullptr);
+        if (edit)
+            SendMessageW(edit, EM_SETCUEBANNER, TRUE,
+                         reinterpret_cast<LPARAM>(L"https://example.com/video.mp4"));
+        CheckDlgButton(dialog, IDC_LOW_LATENCY, DefaultNetworkLowLatency() ? BST_CHECKED : BST_UNCHECKED);
+        SetFocus(combo);
         return FALSE;
     }
     case WM_COMMAND:
@@ -234,6 +400,35 @@ INT_PTR CALLBACK UrlDlgProc(HWND dialog, UINT message, WPARAM wparam, LPARAM lpa
             EndDialog(dialog, IDOK);
             return TRUE;
         }
+        case IDC_URL_REMOVE: {
+            wchar_t buffer[4096] = {};
+            GetDlgItemTextW(dialog, IDC_URL, buffer, 4096);
+            const std::wstring url = Trim(buffer);
+            if (url.empty()) {
+                MessageBoxW(dialog, L"Nothing to remove.", L"Open Network Address", MB_ICONINFORMATION);
+                return TRUE;
+            }
+            if (!RemoveRecentUrl(url)) {
+                MessageBoxW(dialog, L"That address is not in the recent list.", L"Open Network Address",
+                            MB_ICONINFORMATION);
+                return TRUE;
+            }
+            FillRecentUrlCombo(GetDlgItem(dialog, IDC_URL));
+            return TRUE;
+        }
+        case IDC_URL_CLEAR: {
+            if (LoadRecentUrls().empty()) {
+                MessageBoxW(dialog, L"Recent list is already empty.", L"Open Network Address",
+                            MB_ICONINFORMATION);
+                return TRUE;
+            }
+            if (MessageBoxW(dialog, L"Clear all recent network addresses?", L"Open Network Address",
+                            MB_YESNO | MB_ICONQUESTION) != IDYES)
+                return TRUE;
+            ClearRecentUrls();
+            FillRecentUrlCombo(GetDlgItem(dialog, IDC_URL));
+            return TRUE;
+        }
         case IDCANCEL:
             EndDialog(dialog, IDCANCEL);
             return TRUE;
@@ -248,6 +443,141 @@ INT_PTR CALLBACK UrlDlgProc(HWND dialog, UINT message, WPARAM wparam, LPARAM lpa
 }
 
 
+
+
+struct SettingsDialogState {
+    std::vector<std::wstring> model_ids;
+    std::vector<std::wstring> lang_ids;
+};
+
+INT_PTR CALLBACK SettingsDlgProc(HWND dialog, UINT message, WPARAM wparam, LPARAM lparam) {
+    switch (message) {
+    case WM_INITDIALOG: {
+        auto* state = new SettingsDialogState();
+        SetWindowLongPtrW(dialog, DWLP_USER, reinterpret_cast<LONG_PTR>(state));
+
+        HWND model_cb = GetDlgItem(dialog, IDC_SETTINGS_MODEL);
+        WhisperRuntime whisper;
+        const std::vector<WhisperModel> models = whisper.models();
+        std::wstring current_model = LoadAppRegString(L"WhisperModel");
+        if (current_model.empty())
+            current_model = whisper.model_filename();
+        int select_model = 0;
+        if (models.empty()) {
+            const std::wstring fallback = current_model.empty() ? L"ggml-tiny.bin" : current_model;
+            SendMessageW(model_cb, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(fallback.c_str()));
+            state->model_ids.push_back(fallback);
+        } else {
+            for (size_t i = 0; i < models.size(); ++i) {
+                SendMessageW(model_cb, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(models[i].filename.c_str()));
+                state->model_ids.push_back(models[i].filename);
+                if (!current_model.empty() && _wcsicmp(models[i].filename.c_str(), current_model.c_str()) == 0)
+                    select_model = static_cast<int>(i);
+            }
+        }
+        SendMessageW(model_cb, CB_SETCURSEL, select_model, 0);
+
+        HWND lang_cb = GetDlgItem(dialog, IDC_SETTINGS_LANG);
+        const std::vector<CaptionOption> languages = CaptionWorker::languages();
+        std::wstring current_lang = LoadAppRegString(L"WhisperLanguage");
+        if (current_lang.empty())
+            current_lang = L"auto";
+        int select_lang = 0;
+        for (size_t i = 0; i < languages.size(); ++i) {
+            SendMessageW(lang_cb, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(languages[i].label.c_str()));
+            state->lang_ids.push_back(languages[i].id);
+            if (_wcsicmp(languages[i].id.c_str(), current_lang.c_str()) == 0)
+                select_lang = static_cast<int>(i);
+        }
+        SendMessageW(lang_cb, CB_SETCURSEL, select_lang, 0);
+
+        CheckDlgButton(dialog, IDC_SETTINGS_LOW_LATENCY,
+                       DefaultNetworkLowLatency() ? BST_CHECKED : BST_UNCHECKED);
+        SetDlgItemInt(dialog, IDC_SETTINGS_RECENT_COUNT, static_cast<UINT>(MaxRecentUrls()), FALSE);
+        return TRUE;
+    }
+    case WM_DESTROY: {
+        auto* state = reinterpret_cast<SettingsDialogState*>(GetWindowLongPtrW(dialog, DWLP_USER));
+        delete state;
+        SetWindowLongPtrW(dialog, DWLP_USER, 0);
+        break;
+    }
+    case WM_COMMAND:
+        switch (LOWORD(wparam)) {
+        case IDOK: {
+            auto* state = reinterpret_cast<SettingsDialogState*>(GetWindowLongPtrW(dialog, DWLP_USER));
+            const int model_sel =
+                static_cast<int>(SendDlgItemMessageW(dialog, IDC_SETTINGS_MODEL, CB_GETCURSEL, 0, 0));
+            const int lang_sel =
+                static_cast<int>(SendDlgItemMessageW(dialog, IDC_SETTINGS_LANG, CB_GETCURSEL, 0, 0));
+            BOOL translated = FALSE;
+            UINT recent = GetDlgItemInt(dialog, IDC_SETTINGS_RECENT_COUNT, &translated, FALSE);
+            if (!translated || recent < 1 || recent > 20) {
+                MessageBoxW(dialog, L"Recent URLs to keep must be between 1 and 20.", L"Settings",
+                            MB_OK | MB_ICONINFORMATION);
+                return TRUE;
+            }
+            if (state && model_sel >= 0 && static_cast<size_t>(model_sel) < state->model_ids.size())
+                SaveAppRegString(L"WhisperModel", state->model_ids[static_cast<size_t>(model_sel)]);
+            if (state && lang_sel >= 0 && static_cast<size_t>(lang_sel) < state->lang_ids.size())
+                SaveAppRegString(L"WhisperLanguage", state->lang_ids[static_cast<size_t>(lang_sel)]);
+            SaveRegDword(L"NetworkLowLatency",
+                         IsDlgButtonChecked(dialog, IDC_SETTINGS_LOW_LATENCY) == BST_CHECKED ? 1 : 0);
+            SaveRegDword(L"RecentUrlLimit", recent);
+            {
+                std::vector<std::wstring> urls = LoadRecentUrls();
+                if (urls.size() > recent)
+                    urls.resize(recent);
+                SaveRecentUrls(urls);
+            }
+            EndDialog(dialog, IDOK);
+            return TRUE;
+        }
+        case IDCANCEL:
+            EndDialog(dialog, IDCANCEL);
+            return TRUE;
+        default:
+            break;
+        }
+        break;
+    default:
+        break;
+    }
+    return FALSE;
+}
+
+bool CopyDlgItemTextToClipboard(HWND dialog, int control_id) {
+    const int len = GetWindowTextLengthW(GetDlgItem(dialog, control_id));
+    if (len <= 0)
+        return false;
+    std::wstring text(static_cast<size_t>(len) + 1, L'\0');
+    const int got = GetDlgItemTextW(dialog, control_id, text.data(), len + 1);
+    if (got <= 0)
+        return false;
+    text.resize(static_cast<size_t>(got));
+    if (!OpenClipboard(dialog))
+        return false;
+    EmptyClipboard();
+    const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
+    HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE, bytes);
+    if (!mem) {
+        CloseClipboard();
+        return false;
+    }
+    void* locked = GlobalLock(mem);
+    if (!locked) {
+        GlobalFree(mem);
+        CloseClipboard();
+        return false;
+    }
+    memcpy(locked, text.c_str(), bytes);
+    GlobalUnlock(mem);
+    const bool ok = SetClipboardData(CF_UNICODETEXT, mem) != nullptr;
+    if (!ok)
+        GlobalFree(mem);
+    CloseClipboard();
+    return ok;
+}
 struct WhisperModelHelp {
     std::wstring summary;
     std::wstring filename;
@@ -259,28 +589,89 @@ INT_PTR CALLBACK WhisperModelHelpDlgProc(HWND dialog, UINT message, WPARAM wpara
     switch (message) {
     case WM_INITDIALOG: {
         const auto* help = reinterpret_cast<const WhisperModelHelp*>(lparam);
-        SetWindowTextW(dialog, L"upPlayer — Whisper Model");
+        SetWindowTextW(dialog, L"upPlayer - Whisper Model");
         if (help) {
             SetDlgItemTextW(dialog, IDC_WHISPER_SUMMARY, help->summary.c_str());
             SetDlgItemTextW(dialog, IDC_WHISPER_FILE, help->filename.c_str());
             SetDlgItemTextW(dialog, IDC_WHISPER_DIR, help->directory.c_str());
             SetDlgItemTextW(dialog, IDC_WHISPER_URL, help->url.c_str());
         }
+        const HWND url = GetDlgItem(dialog, IDC_WHISPER_URL);
+        if (url) {
+            const HFONT base = reinterpret_cast<HFONT>(SendMessageW(url, WM_GETFONT, 0, 0));
+            LOGFONTW lf{};
+            if (base && GetObjectW(base, sizeof(lf), &lf)) {
+                lf.lfUnderline = TRUE;
+                const HFONT link = CreateFontIndirectW(&lf);
+                if (link) {
+                    SetWindowLongPtrW(dialog, DWLP_USER, reinterpret_cast<LONG_PTR>(link));
+                    SendMessageW(url, WM_SETFONT, reinterpret_cast<WPARAM>(link), TRUE);
+                }
+            }
+        }
         return TRUE;
+    }
+    case WM_DESTROY: {
+        const HFONT link = reinterpret_cast<HFONT>(GetWindowLongPtrW(dialog, DWLP_USER));
+        if (link)
+            DeleteObject(link);
+        SetWindowLongPtrW(dialog, DWLP_USER, 0);
+        break;
+    }
+    case WM_SETCURSOR: {
+        POINT pt{};
+        GetCursorPos(&pt);
+        ScreenToClient(dialog, &pt);
+        const HWND hit = ChildWindowFromPointEx(dialog, pt, CWP_SKIPINVISIBLE | CWP_SKIPDISABLED);
+        if (hit && GetDlgCtrlID(hit) == IDC_WHISPER_URL) {
+            SetCursor(LoadCursorW(nullptr, IDC_HAND));
+            return TRUE;
+        }
+        break;
     }
     case WM_CTLCOLORSTATIC: {
         const HWND child = reinterpret_cast<HWND>(lparam);
         const int id = GetDlgCtrlID(child);
-        if (id == IDC_WHISPER_DIR || id == IDC_WHISPER_URL) {
-            const HDC dc = reinterpret_cast<HDC>(wparam);
+        const HDC dc = reinterpret_cast<HDC>(wparam);
+        if (id == IDC_WHISPER_URL) {
+            SetTextColor(dc, RGB(0, 102, 204));
+            SetBkColor(dc, GetSysColor(COLOR_3DFACE));
+            return reinterpret_cast<INT_PTR>(GetSysColorBrush(COLOR_3DFACE));
+        }
+        if (id == IDC_WHISPER_DIR) {
             SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT));
-            SetBkColor(dc, GetSysColor(COLOR_WINDOW));
-            return reinterpret_cast<INT_PTR>(GetSysColorBrush(COLOR_WINDOW));
+            SetBkColor(dc, GetSysColor(COLOR_3DFACE));
+            return reinterpret_cast<INT_PTR>(GetSysColorBrush(COLOR_3DFACE));
         }
         break;
     }
     case WM_COMMAND:
         switch (LOWORD(wparam)) {
+        case IDC_WHISPER_DIR:
+            if (HIWORD(wparam) == STN_CLICKED || HIWORD(wparam) == STN_DBLCLK) {
+                if (CopyDlgItemTextToClipboard(dialog, IDC_WHISPER_DIR))
+                    SetWindowTextW(dialog, L"upPlayer - Whisper Model (directory copied)");
+                return TRUE;
+            }
+            break;
+        case IDC_WHISPER_URL:
+            if (HIWORD(wparam) == STN_CLICKED || HIWORD(wparam) == STN_DBLCLK) {
+                if (CopyDlgItemTextToClipboard(dialog, IDC_WHISPER_URL))
+                    SetWindowTextW(dialog, L"upPlayer - Whisper Model (URL copied)");
+                return TRUE;
+            }
+            break;
+        case IDC_WHISPER_OPEN_DIR: {
+            wchar_t dir[MAX_PATH] = {};
+            GetDlgItemTextW(dialog, IDC_WHISPER_DIR, dir, MAX_PATH);
+            if (dir[0] == L'\0')
+                return TRUE;
+            CreateDirectoryW(dir, nullptr);  // no-op if it already exists
+            const HINSTANCE opened = ShellExecuteW(dialog, L"explore", dir, nullptr, nullptr, SW_SHOWNORMAL);
+            if (reinterpret_cast<INT_PTR>(opened) <= 32)
+                ShellExecuteW(dialog, L"open", dir, nullptr, nullptr, SW_SHOWNORMAL);
+            return TRUE;
+        }
         case IDOK:
         case IDCANCEL:
             EndDialog(dialog, LOWORD(wparam));
@@ -294,7 +685,6 @@ INT_PTR CALLBACK WhisperModelHelpDlgProc(HWND dialog, UINT message, WPARAM wpara
     }
     return FALSE;
 }
-
 void ShowWhisperModelLoadHelp(HWND owner, const std::wstring& reason, const std::wstring& expected_filename) {
     WhisperRuntime whisper;
     const std::wstring filename = expected_filename.empty() ? L"ggml-tiny.bin" : expected_filename;
@@ -319,7 +709,7 @@ void ShowWhisperModelLoadHelp(HWND owner, const std::wstring& reason, const std:
         body += L"\r\n\r\nHugging Face download URL:\r\n";
         body += url;
         body += L"\r\n\r\nSave the .bin into the model directory, then pick Whisper Model again.";
-        MessageBoxW(owner, body.c_str(), L"upPlayer — Whisper Model", MB_OK | MB_ICONWARNING);
+        MessageBoxW(owner, body.c_str(), L"upPlayer 闂?Whisper Model", MB_OK | MB_ICONWARNING);
     }
 }
 
@@ -376,6 +766,7 @@ private:
     void toggle_captions();
     void generate_srt();
     void load_srt();
+    void clear_srt();
     void refresh_caption_menus();
     void select_caption_model(UINT index);
     void select_caption_language(UINT index);
@@ -392,6 +783,7 @@ private:
     bool lightfc_click_select(int client_x, int client_y);
     void note_playback_time(double time_pos);
     void show_about();
+    void show_settings();
 
     HINSTANCE instance_ = nullptr;
     HWND hwnd_ = nullptr;
@@ -400,6 +792,8 @@ private:
     HMENU context_menu_ = nullptr;
     HMENU caption_model_menu_ = nullptr;
     HMENU caption_lang_menu_ = nullptr;
+    HMENU subtitle_menu_ = nullptr;
+    bool external_subtitle_loaded_ = false;
     std::vector<std::wstring> caption_model_ids_;
     std::vector<std::wstring> caption_lang_ids_;
     Player player_;
@@ -813,8 +1207,7 @@ void App::create_children() {
     caption_lang_menu_ = CreatePopupMenu();
     AppendMenuW(overlay_menu, MF_POPUP, reinterpret_cast<UINT_PTR>(caption_model_menu_), L"Whisper Model");
     AppendMenuW(overlay_menu, MF_POPUP, reinterpret_cast<UINT_PTR>(caption_lang_menu_), L"Language");
-    AppendMenuW(overlay_menu, MF_STRING, ID_GENERATE_SRT, L"Generate SRT...");
-    AppendMenuW(overlay_menu, MF_STRING, ID_LOAD_SRT, L"Load SRT...");
+    AppendMenuW(overlay_menu, MF_STRING, ID_GENERATE_SRT, L"Generate Subtitle...");
     AppendMenuW(overlay_menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(overlay_menu, MF_STRING, ID_YOLO_TOGGLE, L"YOLO26 Detect\ty");
     AppendMenuW(overlay_menu, MF_STRING, ID_LIGHTFC_TOGGLE, L"LightFC Track\tt");
@@ -822,15 +1215,28 @@ void App::create_children() {
     context_menu_ = CreatePopupMenu();
     AppendMenuW(context_menu_, MF_STRING, ID_FILE_OPEN, L"Open...\tCtrl+O");
     AppendMenuW(context_menu_, MF_STRING, ID_FILE_OPEN_URL, L"Open Network Address...\tCtrl+U");
+
     AppendMenuW(context_menu_, MF_STRING, ID_SNAPSHOT, L"Take Snapshot\ts");
+    subtitle_menu_ = CreatePopupMenu();
+    AppendMenuW(subtitle_menu_, MF_STRING, ID_LOAD_SRT, L"Load Subtitle...");
+    AppendMenuW(subtitle_menu_, MF_STRING, ID_CLEAR_SRT, L"Unload Subtitle");
+    {
+        MENUITEMINFOW hide{};
+        hide.cbSize = sizeof(hide);
+        hide.fMask = MIIM_STATE;
+        hide.fState = MFS_HIDDEN | MFS_DISABLED;
+        SetMenuItemInfoW(subtitle_menu_, ID_CLEAR_SRT, FALSE, &hide);
+    }
+    AppendMenuW(context_menu_, MF_POPUP, reinterpret_cast<UINT_PTR>(subtitle_menu_), L"Subtitle");
     AppendMenuW(context_menu_, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(context_menu_, MF_POPUP, reinterpret_cast<UINT_PTR>(playback_menu), L"Playback");
     AppendMenuW(context_menu_, MF_POPUP, reinterpret_cast<UINT_PTR>(speed_menu), L"Speed");
     AppendMenuW(context_menu_, MF_POPUP, reinterpret_cast<UINT_PTR>(size_menu), L"Size");
     AppendMenuW(context_menu_, MF_POPUP, reinterpret_cast<UINT_PTR>(volume_menu), L"Volume");
     AppendMenuW(context_menu_, MF_POPUP, reinterpret_cast<UINT_PTR>(clip_menu), L"Clip");
-    AppendMenuW(context_menu_, MF_POPUP, reinterpret_cast<UINT_PTR>(overlay_menu), L"Overlay");
+    AppendMenuW(context_menu_, MF_POPUP, reinterpret_cast<UINT_PTR>(overlay_menu), L"AI");
     AppendMenuW(context_menu_, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(context_menu_, MF_STRING, ID_SETTINGS, L"Settings...");
     AppendMenuW(context_menu_, MF_STRING, ID_HELP_ABOUT, L"About upPlayer...");
     AppendMenuW(context_menu_, MF_STRING, ID_FILE_EXIT, L"Exit");
 
@@ -854,7 +1260,7 @@ void App::refresh_caption_menus() {
     const std::vector<CaptionOption> models = captions_->models();
     const std::wstring current_model = captions_->model_id();
     if (models.empty()) {
-        AppendMenuW(caption_model_menu_, MF_STRING | MF_GRAYED, 0, L"(no ggml models)");
+        AppendMenuW(caption_model_menu_, MF_STRING, ID_WHISPER_GET_MODEL, L"Download model...");
     } else {
         const size_t count = (std::min)(models.size(), static_cast<size_t>(ID_CAPTION_MODEL_LAST - ID_CAPTION_MODEL_FIRST + 1));
         for (size_t i = 0; i < count; ++i) {
@@ -931,12 +1337,24 @@ void App::show_context_menu(int screen_x, int screen_y) {
     CheckMenuItem(context_menu_, ID_CAPTIONS_TOGGLE,
                   MF_BYCOMMAND | ((captions_ && captions_->enabled()) ? MF_CHECKED : MF_UNCHECKED));
     {
-        const bool can_srt = captions_ && !captions_->srt_busy() && player_.state().has_media;
+        const bool srt_busy = captions_ && captions_->srt_busy();
+        const bool can_srt = captions_ && !srt_busy && player_.state().has_media;
+        ModifyMenuW(context_menu_, ID_GENERATE_SRT, MF_BYCOMMAND | MF_STRING, ID_GENERATE_SRT,
+                    srt_busy ? L"Cancel Generate Subtitle\tEsc" : L"Generate Subtitle...");
         EnableMenuItem(context_menu_, ID_GENERATE_SRT,
-                       MF_BYCOMMAND | (can_srt ? MF_ENABLED : MF_GRAYED));
+                       MF_BYCOMMAND | ((srt_busy || can_srt) ? MF_ENABLED : MF_GRAYED));
         const bool can_load = player_.state().has_media;
         EnableMenuItem(context_menu_, ID_LOAD_SRT,
                        MF_BYCOMMAND | (can_load ? MF_ENABLED : MF_GRAYED));
+        if (subtitle_menu_) {
+            MENUITEMINFOW unload_info{};
+            unload_info.cbSize = sizeof(unload_info);
+            unload_info.fMask = MIIM_STATE;
+            unload_info.fState = external_subtitle_loaded_
+                                    ? MFS_ENABLED
+                                    : (MFS_HIDDEN | MFS_DISABLED);
+            SetMenuItemInfoW(subtitle_menu_, ID_CLEAR_SRT, FALSE, &unload_info);
+        }
     }
     CheckMenuItem(context_menu_, ID_YOLO_TOGGLE,
                   MF_BYCOMMAND | ((yolo_ && yolo_->enabled()) ? MF_CHECKED : MF_UNCHECKED));
@@ -1066,6 +1484,21 @@ void App::update_title() {
     }
     if (lightfc_ && lightfc_->enabled())
         caption += L" [Track on]";
+    if (captions_ && captions_->srt_busy()) {
+        const std::wstring st = captions_->srt_status();
+        const std::wstring gen_prefix = L"Generating SRT... ";
+        if (st.rfind(gen_prefix, 0) == 0) {
+            caption += L" [Generating subtitle ";
+            caption += st.substr(gen_prefix.size());  // e.g. "42%"
+            caption += L"]";
+        } else if (!st.empty()) {
+            caption += L" [";
+            caption += st;
+            caption += L"]";
+        } else {
+            caption += L" [Generating subtitle...]";
+        }
+    }
     if (caption != shown_title_) {
         shown_title_ = caption;
         SetWindowTextW(hwnd_, caption.c_str());
@@ -1435,6 +1868,7 @@ void App::open_url() {
     if (DialogBoxParamW(instance_, MAKEINTRESOURCEW(IDD_URL), hwnd_, UrlDlgProc,
                         reinterpret_cast<LPARAM>(&result)) != IDOK)
         return;
+    RememberRecentUrl(result.url);
     player_.stop_playback();
     if (!player_.prepare_network_latency(result.low_latency))
         update_title();
@@ -1450,6 +1884,7 @@ void App::open_target(const std::wstring& target, bool auto_live_for_network) {
     clip_dragging_ = ClipMark::None;
     last_caption_time_ = -1.0;
     last_caption_osd_.clear();
+    external_subtitle_loaded_ = false;
     player_.clear_caption();
     if (auto_live_for_network) {
         std::wstring lower = target;
@@ -1478,6 +1913,21 @@ void App::show_about() {
     text += L"\n\nLicense: MIT (see LICENSE / NOTICE)";
     MessageBoxW(hwnd_, text.c_str(), L"About upPlayer", MB_OK | MB_ICONINFORMATION);
 }
+void App::show_settings() {
+    if (DialogBoxParamW(instance_, MAKEINTRESOURCEW(IDD_SETTINGS), hwnd_, SettingsDlgProc, 0) != IDOK)
+        return;
+    if (captions_) {
+        const std::wstring model = LoadAppRegString(L"WhisperModel");
+        if (!model.empty())
+            captions_->set_model(model);
+        const std::wstring lang = LoadAppRegString(L"WhisperLanguage");
+        if (!lang.empty())
+            captions_->set_language(lang);
+        refresh_caption_menus();
+    }
+    player_.show_osd("Settings saved", 1400);
+}
+
 
 void App::toggle_captions() {
     if (!captions_)
@@ -1498,20 +1948,34 @@ void App::toggle_captions() {
 void App::generate_srt() {
     if (!captions_)
         return;
+    if (captions_->srt_busy()) {
+        captions_->cancel_generate_srt();
+        player_.show_osd("Cancelling subtitle...", 1600);
+        update_title();
+        return;
+    }
+    if (!captions_->has_whisper_model()) {
+        std::wstring expected = captions_->model_id();
+        if (expected.empty())
+            expected = L"ggml-tiny.bin";
+        ShowWhisperModelLoadHelp(hwnd_, L"No usable ggml model was found in the model directory.", expected);
+        return;
+    }
     sync_captions_media();
     std::wstring error;
     if (!captions_->request_generate_srt(&error)) {
-        MessageBoxW(hwnd_, error.empty() ? L"Cannot start Generate SRT." : error.c_str(),
-                    L"upPlayer - Generate SRT", MB_OK | MB_ICONINFORMATION);
+        MessageBoxW(hwnd_, error.empty() ? L"Cannot start Generate Subtitle." : error.c_str(),
+                    L"upPlayer - Generate Subtitle", MB_OK | MB_ICONINFORMATION);
         return;
     }
-    player_.show_osd("Generating SRT...", 2000);
+    player_.show_osd("Generating subtitle...", 2000);
+    update_title();
 }
 
 
 void App::load_srt() {
     if (!player_.state().has_media) {
-        MessageBoxW(hwnd_, L"Open a video first.", L"upPlayer - Load SRT",
+        MessageBoxW(hwnd_, L"Open a video first.", L"upPlayer - Load Subtitle",
                     MB_OK | MB_ICONINFORMATION);
         return;
     }
@@ -1551,7 +2015,7 @@ void App::load_srt() {
     dialog.lpstrFile = buffer.data();
     dialog.nMaxFile = static_cast<DWORD>(buffer.size());
     dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_NOCHANGEDIR;
-    dialog.lpstrTitle = L"Load SRT";
+    dialog.lpstrTitle = L"Load Subtitle";
     dialog.lpstrDefExt = L"srt";
     if (!initial_dir.empty())
         dialog.lpstrInitialDir = initial_dir.c_str();
@@ -1562,15 +2026,33 @@ void App::load_srt() {
     std::wstring error;
     if (!player_.add_external_subtitle(path, &error)) {
         MessageBoxW(hwnd_, error.empty() ? L"Failed to load subtitle." : error.c_str(),
-                    L"upPlayer - Load SRT", MB_OK | MB_ICONWARNING);
+                    L"upPlayer - Load Subtitle", MB_OK | MB_ICONWARNING);
         return;
     }
 
     const auto slash = path.find_last_of(L"\\/");
     const std::wstring name = slash == std::wstring::npos ? path : path.substr(slash + 1);
+    external_subtitle_loaded_ = true;
     player_.show_osd(WideToUtf8(L"Loaded: " + name), 1600);
 }
 
+
+
+void App::clear_srt() {
+    if (!player_.state().has_media) {
+        MessageBoxW(hwnd_, L"Open a video first.", L"upPlayer - Unload Subtitle",
+                    MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    std::wstring error;
+    if (!player_.clear_external_subtitle(&error)) {
+        MessageBoxW(hwnd_, error.empty() ? L"Failed to unload subtitle." : error.c_str(),
+                    L"upPlayer - Unload Subtitle", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    external_subtitle_loaded_ = false;
+    player_.show_osd("Unloaded subtitle", 1200);
+}
 
 void App::set_yolo_mode(YoloMode mode) {
     if (!yolo_)
@@ -1648,7 +2130,7 @@ bool App::lightfc_click_select(int client_x, int client_y) {
     box.score = 1.f;
     if (!lightfc_->init_at(box))
         return false;
-    player_.show_osd("LightFC: locking…", 1000);
+    player_.show_osd("LightFC: locking...", 1000);
     tick_lightfc();
     return true;
 }
@@ -1807,7 +2289,7 @@ void App::refresh_caption_osd(bool force_status) {
         if (osd.rfind(L"missing:", 0) == 0)
             osd = L"Whisper model missing - see dialog for download URL";
         else if (osd.rfind(L"server:", 0) == 0)
-            osd = L"Whisper server failed — see dialog";
+            osd = L"Whisper server failed 闂?see dialog";
         player_.show_osd(WideToUtf8(osd), 1500);
     }
 }
@@ -1849,6 +2331,12 @@ void App::clear_clip_marks() {
 }
 
 void App::handle_escape() {
+    if (captions_ && captions_->srt_busy()) {
+        captions_->cancel_generate_srt();
+        player_.show_osd("Cancelling subtitle...", 1600);
+        update_title();
+        return;
+    }
     if (clip_session_active()) {
         clear_clip_marks();
         return;
@@ -1914,7 +2402,7 @@ void App::export_clip() {
     swprintf_s(start_arg, L"%.3f", start);
     swprintf_s(end_arg, L"%.3f", end);
 
-    // Official Windows mpv builds do not expose --ovc=copy. Use stream-record to dump A–B.
+    // Official Windows mpv builds do not expose --ovc=copy. Use stream-record to dump A闂傚倷鑳堕崑銊╁磿閹绘帩鍤?
     const std::wstring output = buffer.data();
     const std::wstring command =
         QuoteCmd(mpv) + L" --no-config --vo=null --ao=null --sid=no --start=" + start_arg +
@@ -1983,6 +2471,9 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
             return 0;
         case ID_FILE_EXIT:
             DestroyWindow(hwnd);
+            return 0;
+        case ID_SETTINGS:
+            show_settings();
             return 0;
         case ID_HELP_ABOUT:
             show_about();
@@ -2078,8 +2569,18 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
         case ID_GENERATE_SRT:
             generate_srt();
             return 0;
+        case ID_WHISPER_GET_MODEL: {
+            std::wstring expected = captions_ ? captions_->model_id() : L"";
+            if (expected.empty())
+                expected = L"ggml-tiny.bin";
+            ShowWhisperModelLoadHelp(hwnd_, L"No usable ggml model was found in the model directory.", expected);
+            return 0;
+        }
         case ID_LOAD_SRT:
             load_srt();
+            return 0;
+        case ID_CLEAR_SRT:
+            clear_srt();
             return 0;
         case ID_YOLO_TOGGLE:
             cycle_yolo_mode();
@@ -2096,7 +2597,7 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
         refresh_caption_osd(true);
         if (captions_ && captions_->enabled()) {
             const std::wstring status = captions_->status_text();
-            // Tagged missing:/server: errors from WhisperRuntime — show a one-shot help popup.
+            // Tagged missing:/server: errors from WhisperRuntime 闂?show a one-shot help popup.
             if (status.rfind(L"missing:", 0) == 0 || status.find(L"No Whisper model") != std::wstring::npos ||
                 status.find(L"Whisper model missing") != std::wstring::npos ||
                 status.find(L"place a ggml") != std::wstring::npos) {
@@ -2130,12 +2631,15 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
             return 0;
         const WPARAM code = wparam;
         const std::wstring status = captions_->srt_status();
+        update_title();
         if (code == 1) {
             const std::wstring path = captions_->last_srt_path();
             player_.show_osd("SRT saved", 1800);
             std::wstring body = L"Subtitle file saved:\r\n\r\n";
             body += path.empty() ? status : path;
-            MessageBoxW(hwnd_, body.c_str(), L"upPlayer - Generate SRT", MB_OK | MB_ICONINFORMATION);
+            MessageBoxW(hwnd_, body.c_str(), L"upPlayer - Generate Subtitle", MB_OK | MB_ICONINFORMATION);
+        } else if (code == 3 || status == L"Cancelled") {
+            player_.show_osd("Generate cancelled", 1600);
         } else if (code == 2) {
             if (status.rfind(L"missing:", 0) == 0 ||
                 status.find(L"Whisper model missing") != std::wstring::npos ||
@@ -2150,8 +2654,8 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
                 }
                 ShowWhisperModelLoadHelp(hwnd_, reason, expected);
             } else {
-                MessageBoxW(hwnd_, status.empty() ? L"Generate SRT failed." : status.c_str(),
-                            L"upPlayer - Generate SRT", MB_OK | MB_ICONWARNING);
+                MessageBoxW(hwnd_, status.empty() ? L"Generate Subtitle failed." : status.c_str(),
+                            L"upPlayer - Generate Subtitle", MB_OK | MB_ICONWARNING);
             }
             player_.show_osd("SRT failed", 1600);
         } else if (!status.empty()) {
