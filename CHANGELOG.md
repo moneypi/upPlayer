@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.6
+
+- Hide commands that need a video; Speed, Volume, Play/Pause, and Clip titles follow the current state
+- Frame Back and Frame Forward are listed once; Cancel Clip and Export Clip appear only when they apply
+- Generate Subtitle loads the SRT and reports success on screen; drop a subtitle onto an open video
+- YOLO and LightFC turn each other off
+- Settings: snapshot folder (Pictures by default) and clip folder (Videos by default)
+- Volume, mute, and the position of a local file are remembered; a live address always starts at the live edge
+- Live playback hides the seek track; export notes that the start may move to the nearest keyframe
+
 ## 0.6.5
 
 - Whisper model-missing dialog is copyable; no fetch-script mention

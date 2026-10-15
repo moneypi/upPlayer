@@ -34,7 +34,7 @@ enum class CaptionStatus {
 class CaptionWorker {
 public:
     static constexpr UINT WM_CAPTION_UPDATE = WM_APP + 40;
-    // WPARAM: 0 = progress (read srt_status), 1 = success (read last_srt_path), 2 = error (read srt_status).
+    // WPARAM: 0 = progress (read srt_status), 1 = success (read last_srt_path), 2 = error (read srt_status), 3 = cancelled.
     static constexpr UINT WM_SRT_DONE = WM_APP + 43;
 
     explicit CaptionWorker(HWND notify);
@@ -53,6 +53,7 @@ public:
     std::vector<CaptionOption> models() const;
     std::wstring model_id() const;
     bool set_model(const std::wstring& filename);
+    bool has_whisper_model() const;
 
     void set_media(const std::wstring& path, double duration);
     void on_seek(double time_pos);
@@ -67,6 +68,7 @@ public:
     // Uses the currently selected Whisper Model + Language. Non-blocking.
     // Returns false if busy / no media / non-local path (error filled when provided).
     bool request_generate_srt(std::wstring* error = nullptr);
+    void cancel_generate_srt();
     bool srt_busy() const;
     std::wstring srt_status() const;
     std::wstring last_srt_path() const;
@@ -94,6 +96,7 @@ private:
     std::thread srt_thread_;
     std::atomic<bool> run_{false};
     std::atomic<bool> srt_busy_{false};
+    std::atomic<bool> srt_cancel_{false};
     bool enabled_ = false;
     bool wake_ = false;
     double time_pos_ = 0.0;

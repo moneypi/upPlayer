@@ -2,7 +2,7 @@
 
 Lightweight Windows video player front-end for [mpv](https://mpv.io/). Opens local files and network URLs, embeds playback in a Win32 window, and includes a simple seek bar.
 
-**Version:** 0.6.0 (right-click → **About upPlayer…**) — see [CHANGELOG](CHANGELOG.md)
+**Version:** 0.6.6 (right-click → **About upPlayer…**) — see [CHANGELOG](CHANGELOG.md)
 
 **License:** upPlayer source is [MIT](LICENSE). Third-party components (mpv, whisper.cpp, models) have their own terms — see [NOTICE](NOTICE).
 
@@ -78,7 +78,7 @@ Publish a GitHub release (tag + setup asset):
 | **↓** / **↑** | Volume −2 / +2 (range 0–100) |
 | **m** | Mute / unmute |
 | **Mouse wheel** | Volume up / down (over video or seek bar) |
-| **s** | Take snapshot (saved to Desktop) |
+| **s** | Take snapshot (saved to the snapshot folder; Pictures by default) |
 | **a** | Toggle live auto captions (whisper.cpp) |
 | **y** | Toggle YOLO26 detection (skips busy frames; never stalls play) |
 | **t** | LightFC track: arm → click target on video (skip busy frames) |
@@ -116,7 +116,7 @@ Press **t** to arm, then click the object on the video. LightFC tracks with a cy
 
 ### Auto captions
 
-Press **a** to toggle live captions. Right-click → **Overlay** → **Whisper Model** / **Language** to pick a ggml model (anything `ggml-*.bin` under the whisper models folders) and a language, including **Auto**. Both choices are remembered; switching the model restarts whisper-server. Captions use MIT [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (not PotPlayer libraries):
+Press **a** to toggle live captions. Right-click → **AI** → **Whisper Model** / **Language** to pick a ggml model (anything `ggml-*.bin` under the whisper models folders) and a language, including **Auto**. Both choices are remembered; switching the model restarts whisper-server. Captions use MIT [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (not PotPlayer libraries):
 
 ```powershell
 .\scripts\fetch-whisper-deps.ps1   # Vulkan whisper-cli + ggml-tiny.bin → third_party\whisper-win\

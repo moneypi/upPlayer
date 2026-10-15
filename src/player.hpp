@@ -41,7 +41,7 @@ public:
     bool start(HWND video, HWND notify);
     void shutdown();
 
-    bool load(const std::wstring& target);
+    bool load(const std::wstring& target, double resume_at = -1.0);
     void append(const std::wstring& target);
     bool set_low_latency(bool enabled);
     // One switch: enables CLI-equivalent --profile=low-latency --untimed together.
@@ -60,14 +60,18 @@ public:
     void toggle_stats();
     void adjust_volume(double delta);
     void set_volume(double volume, bool show_osd = true);
+    void set_mute(bool muted);
     void toggle_mute();
     void take_snapshot();
+    void set_screenshot_directory(const std::wstring& path);
     void show_osd(const std::string& text, int duration_ms = 1200);
     // PotPlayer-like bottom caption (ASS overlay); empty text clears it.
     void show_caption(const std::string& text);
     void clear_caption();
     // Load an external subtitle file (mpv sub-add select). Returns false on failure.
     bool add_external_subtitle(const std::wstring& path, std::wstring* error = nullptr);
+    // Remove the current external/selected subtitle track (mpv sub-remove).
+    bool clear_external_subtitle(std::wstring* error = nullptr);
     // Fire-and-forget video frame grab (never waits). Used by YOLO worker.
     void screenshot_to_file(const std::wstring& path);
     // YOLO detection overlay: ASS HUD (osd id 11) + optional BGRA box bitmap (overlay id 12).
@@ -114,7 +118,8 @@ private:
     void writer_main();
     void handle_ipc_line(const std::string& line);
 
-    void load_utf8(const std::string& utf8, const std::wstring& display, bool preserve_seek);
+    void load_utf8(const std::string& utf8, const std::wstring& display, bool preserve_seek,
+                   double resume_at = -1.0);
     void on_file_loaded();
     void set_time(double t);
     void set_duration(double t);
@@ -155,6 +160,7 @@ private:
     HANDLE pipe_ = INVALID_HANDLE_VALUE;
     std::wstring pipe_name_;
     std::wstring log_path_;
+    std::wstring screenshot_dir_;
     std::thread reader_;
     std::thread writer_;
     std::deque<std::string> write_queue_;

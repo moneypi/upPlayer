@@ -493,7 +493,8 @@ bool Player::start_libmpv(HWND video, std::wstring& error) {
     option_string("hwdec", "auto-safe");
     option_string("osc", "yes");
     option_string("input-vo-keyboard", "no");
-    option_string("screenshot-directory", "~~desktop/");
+    if (!screenshot_dir_.empty())
+        option_string("screenshot-directory", WideToUtf8(screenshot_dir_).c_str());
     option_string("screenshot-template", "upPlayer-%F-%n");
     option_string("screenshot-format", "jpg");
 
@@ -574,7 +575,9 @@ bool Player::start_exe(HWND video, std::wstring& error, bool live_mode,
     std::wstring cmd = QuoteArg(mpv);
     cmd += L" --no-config --no-terminal --force-window=no";
     cmd += L" --input-vo-keyboard=no --input-cursor=yes";
-    cmd += L" --screenshot-directory=~~desktop/ --screenshot-template=upPlayer-%F-%n --screenshot-format=jpg";
+    if (!screenshot_dir_.empty())
+        cmd += L" --screenshot-directory=" + QuoteArg(screenshot_dir_);
+    cmd += L" --screenshot-template=upPlayer-%F-%n --screenshot-format=jpg";
     if (live_mode) {
         cmd += L" --profile=low-latency --untimed --keep-open=yes";
         if (initial_url.empty())
@@ -911,7 +914,7 @@ void Player::handle_ipc_line(const std::string& line) {
     resolve_wait(static_cast<int>(id.number), error);
 }
 
-bool Player::load(const std::wstring& target) {
+bool Player::load(const std::wstring& target, double resume_at) {
     if (!running_.load() && !video_hwnd_)
         return false;
     const std::wstring trimmed = Trim(target);
@@ -955,7 +958,7 @@ bool Player::load(const std::wstring& target) {
 
     if (!running_.load())
         return false;
-    load_utf8(WideToUtf8(trimmed), DisplayName(trimmed), false);
+    load_utf8(WideToUtf8(trimmed), DisplayName(trimmed), false, resume_at);
     return true;
 }
 
@@ -968,11 +971,12 @@ void Player::append(const std::wstring& target) {
     post({"loadfile", WideToUtf8(trimmed), "append"});
 }
 
-void Player::load_utf8(const std::string& utf8, const std::wstring& display, bool preserve_seek) {
+void Player::load_utf8(const std::string& utf8, const std::wstring& display, bool preserve_seek,
+                       double resume_at) {
     {
         std::lock_guard<std::mutex> lock(mu_);
         if (!preserve_seek)
-            pending_seek_ = -1.0;
+            pending_seek_ = resume_at >= 1.0 ? resume_at : -1.0;
         current_utf8_ = utf8;
         current_display_ = display;
         state_.title = display;
@@ -1127,9 +1131,43 @@ void Player::set_volume(double volume, bool show_osd) {
     apply_volume(volume, show_osd);
 }
 
+void Player::set_mute(bool muted) {
+    if (!running_.load())
+        return;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (state_.mute == muted)
+            return;
+    }
+    if (!backend_exe_ && ctx_ && api_ && api_->set_property) {
+        int flag = muted ? 1 : 0;
+        api_->set_property(static_cast<mpv_handle*>(ctx_), "mute", MPV_FORMAT_FLAG, &flag);
+    } else {
+        write_line(std::string("{\"command\":[\"set_property\",\"mute\",") + (muted ? "true" : "false") + "]}");
+    }
+    set_mute_state(muted);
+}
+
+void Player::set_screenshot_directory(const std::wstring& path) {
+    std::wstring dir = path;
+    while (!dir.empty() && (dir.back() == L'\\' || dir.back() == L'/'))
+        dir.pop_back();
+    screenshot_dir_ = dir;
+    if (!running_.load() || dir.empty())
+        return;
+    post({"set_property", "screenshot-directory", WideToUtf8(dir)});
+}
+
 void Player::take_snapshot() {
     post({"screenshot"});
-    show_osd("Snapshot saved to Desktop", 1200);
+    std::wstring leaf = screenshot_dir_;
+    const auto slash = leaf.find_last_of(L"\\/");
+    if (slash != std::wstring::npos)
+        leaf = leaf.substr(slash + 1);
+    std::string message = "Snapshot saved";
+    if (!leaf.empty())
+        message += " to " + WideToUtf8(leaf);
+    show_osd(message, 1400);
 }
 
 void Player::show_osd(const std::string& text, int duration_ms) {
@@ -1691,6 +1729,25 @@ bool Player::add_external_subtitle(const std::wstring& path, std::wstring* error
         return false;
     }
     post({"set", "sub-visibility", "yes"});
+    return true;
+}
+
+
+bool Player::clear_external_subtitle(std::wstring* error) {
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (!state_.has_media) {
+            if (error)
+                *error = L"Open a video first.";
+            return false;
+        }
+    }
+    // Remove the currently selected subtitle (external SRT from sub-add, or embedded).
+    if (!exec({"sub-remove"}, error)) {
+        if (error && error->empty())
+            *error = L"mpv failed to remove the subtitle (sub-remove).";
+        return false;
+    }
     return true;
 }
 

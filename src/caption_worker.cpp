@@ -243,6 +243,7 @@ CaptionWorker::~CaptionWorker() {
         run_ = false;
         wake_ = true;
     }
+    srt_cancel_ = true;
     cv_.notify_all();
     whisper_.cancel();
     if (thread_.joinable())
@@ -377,6 +378,10 @@ bool CaptionWorker::set_model(const std::wstring& filename) {
     if (notify_)
         PostMessageW(notify_, WM_CAPTION_UPDATE, 0, 0);
     return true;
+}
+
+bool CaptionWorker::has_whisper_model() const {
+    return !whisper_.model_path().empty();
 }
 
 void CaptionWorker::set_media(const std::wstring& path, double duration) {
@@ -898,6 +903,7 @@ bool CaptionWorker::request_generate_srt(std::wstring* error) {
             *error = L"SRT generation is already running";
         return false;
     }
+    srt_cancel_ = false;
 
     std::wstring media;
     double duration = -1.0;
@@ -939,7 +945,7 @@ bool CaptionWorker::request_generate_srt(std::wstring* error) {
         starts_with_ci(media, L"rtp://") || starts_with_ci(media, L"udp://")) {
         srt_busy_ = false;
         if (error)
-            *error = L"Generate SRT needs a local media file (not a network stream)";
+            *error = L"Generate Subtitle needs a local media file (not a network stream)";
         return false;
     }
     if (!(duration > 0.5)) {
@@ -958,6 +964,17 @@ bool CaptionWorker::request_generate_srt(std::wstring* error) {
     return true;
 }
 
+void CaptionWorker::cancel_generate_srt() {
+    if (!srt_busy_.load())
+        return;
+    srt_cancel_ = true;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        srt_status_ = L"Cancelling...";
+    }
+    whisper_.cancel();
+    post_srt(0);
+}
 void CaptionWorker::srt_thread_main(std::wstring media, double duration, std::string language) {
     constexpr double kSrtChunkSec = 28.0;
     constexpr double kSrtOverlapSec = 1.0;
@@ -983,7 +1000,7 @@ void CaptionWorker::srt_thread_main(std::wstring media, double duration, std::st
         return;
     }
 
-    set_status(L"Generating SRT...");
+    set_status(L"Generating SRT... 0%");
 
     std::vector<CaptionCue> all_cues;
     std::string prompt;
@@ -992,13 +1009,13 @@ void CaptionWorker::srt_thread_main(std::wstring media, double duration, std::st
     int chunk_index = 0;
 
     while (covered < duration - 0.05) {
-        if (!run_) {
+        if (srt_cancel_.load() || !run_.load()) {
             {
                 std::lock_guard<std::mutex> lock(mu_);
                 srt_status_ = L"Cancelled";
             }
             srt_busy_ = false;
-            post_srt(2);
+            post_srt(3);
             return;
         }
 
@@ -1010,7 +1027,7 @@ void CaptionWorker::srt_thread_main(std::wstring media, double duration, std::st
             break;
 
         wchar_t progress[128];
-        swprintf_s(progress, L"Generating SRT... %.0f%%", (start / duration) * 100.0);
+        swprintf_s(progress, L"Generating SRT... %.0f%%", (std::min)(99.0, (start / duration) * 100.0));
         set_status(progress);
 
         wchar_t temp_dir[MAX_PATH] = {};
@@ -1045,6 +1062,15 @@ void CaptionWorker::srt_thread_main(std::wstring media, double duration, std::st
         const bool ok = whisper_.transcribe(wav_path, prompt, segments, &asr_error, asr_lang);
         DeleteFileW(wav_path.c_str());
         if (!ok) {
+            if (srt_cancel_.load() || !run_.load()) {
+                {
+                    std::lock_guard<std::mutex> lock(mu_);
+                    srt_status_ = L"Cancelled";
+                }
+                srt_busy_ = false;
+                post_srt(3);
+                return;
+            }
             {
                 std::lock_guard<std::mutex> lock(mu_);
                 srt_status_ = asr_error.empty() ? whisper_.last_error() : asr_error;
